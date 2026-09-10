@@ -12,5 +12,8 @@
       "extensions": [],
       "settings": {}
     }
+  },
+  "postCreateCommand": {
+    "moon-completion": "moon completions --shell bash | sudo tee -a /etc/bash_completion.d/moon > /dev/null"
   }
 }

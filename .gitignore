@@ -11,3 +11,7 @@ Thumbs.db
 .envrc
 
 .claude
+
+# moon
+.moon/cache
+.moon/docker
