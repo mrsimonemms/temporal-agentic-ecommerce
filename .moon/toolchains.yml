@@ -1,4 +1,5 @@
 javascript:
+  inferTasksFromScripts: true
   packageManager: npm
 
 node: {}
