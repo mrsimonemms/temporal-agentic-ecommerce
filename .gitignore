@@ -11,6 +11,9 @@ Thumbs.db
 .envrc
 
 .claude
+go.work.sum
+
+workers/*/app
 
 # moon
 .moon/cache

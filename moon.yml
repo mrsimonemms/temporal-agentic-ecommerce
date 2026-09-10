@@ -1,0 +1,6 @@
+id: root
+tasks:
+  temporal:
+    command: temporal server start-dev
+    options:
+      persistent: true

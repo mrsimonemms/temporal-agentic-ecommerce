@@ -5,15 +5,26 @@
     "ghcr.io/devcontainers-extra/features/gh-release:1": {
       "repo": "moonrepo/moon",
       "binaryNames": "moon"
-    }
+    },
+    "ghcr.io/mrsimonemms/devcontainers/cobra-cli:1": {},
+    "ghcr.io/devcontainers-extra/features/temporal-cli:1": {},
+    "ghcr.io/mrsimonemms/devcontainers/air:1": {}
   },
   "customizations": {
     "vscode": {
-      "extensions": [],
+      "extensions": [
+        "esbenp.prettier-vscode",
+        "svelte.svelte-vscode"
+      ],
       "settings": {}
     }
   },
   "postCreateCommand": {
     "moon-completion": "moon completions --shell bash | sudo tee -a /etc/bash_completion.d/moon > /dev/null"
-  }
+  },
+  "forwardPorts": [
+    5173,
+    7233,
+    8233
+  ]
 }

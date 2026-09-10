@@ -1,0 +1,17 @@
+language: go
+layer: application
+tasks:
+  build:
+    command: go build -o app .
+  dev:
+    command: air
+    deps:
+      - root:temporal
+    options:
+      runInCI: false
+  lint:
+    command: golangci-lint run ./...
+  test:
+    command: go test ./...
+  vet:
+    command: go vet -V ./...
