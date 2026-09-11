@@ -1,0 +1,48 @@
+{
+  "name": "api",
+  "version": "0.0.0",
+  "author": "Simon Emms <simon@simonemms.com>",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "lint": "oxlint src/ test/",
+    "start": "node dist/main",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/config": "^12.0.0",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/mongoose": "^12.0.0",
+    "@nestjs/platform-fastify": "^12.0.1",
+    "@nestjs/terminus": "^12.0.0",
+    "@temporalio/client": "^1.23.0",
+    "@ucp-js/sdk": "^0.5.1",
+    "class-transformer": "^0.5.1",
+    "class-validate": "^0.0.1",
+    "class-validator": "^0.15.1",
+    "mongoose": "^9.10.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^12.0.0",
+    "@nestjs/mau": "^0.2.6",
+    "@nestjs/schematics": "^12.0.0",
+    "@nestjs/testing": "^12.0.1",
+    "@trivago/prettier-plugin-sort-imports": "^6.0.2",
+    "@types/node": "^24.0.0",
+    "@types/supertest": "^7.0.0",
+    "@vitest/coverage-v8": "^4.1.2",
+    "oxlint": "^1.58.0",
+    "prettier": "^3.4.2",
+    "source-map-support": "^0.5.21",
+    "supertest": "^7.0.0",
+    "typescript": "^6.0.2",
+    "vite-tsconfig-paths": "^5.1.4",
+    "vitest": "^4.1.2"
+  }
+}

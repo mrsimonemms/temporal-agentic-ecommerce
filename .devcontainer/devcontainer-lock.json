@@ -5,6 +5,11 @@
       "resolved": "ghcr.io/devcontainers-extra/features/gh-release@sha256:09be4373c696a6a457dad170233c76934ae250edfda0e126f8617fcb41bdd418",
       "integrity": "sha256:09be4373c696a6a457dad170233c76934ae250edfda0e126f8617fcb41bdd418"
     },
+    "ghcr.io/devcontainers-extra/features/nestjs-cli:2": {
+      "version": "2.0.16",
+      "resolved": "ghcr.io/devcontainers-extra/features/nestjs-cli@sha256:ab4c5c5064288e2d1d51081e3429fabb3394fdfc575305c768328d5ab167f8b6",
+      "integrity": "sha256:ab4c5c5064288e2d1d51081e3429fabb3394fdfc575305c768328d5ab167f8b6"
+    },
     "ghcr.io/devcontainers-extra/features/temporal-cli:1": {
       "version": "1.0.7",
       "resolved": "ghcr.io/devcontainers-extra/features/temporal-cli@sha256:275980d00e6e4d291d1e71a7f94a7d4c70e4d0cb82e3a7e0db04a6b3b0390761",
@@ -19,6 +24,11 @@
       "version": "1.0.0",
       "resolved": "ghcr.io/mrsimonemms/devcontainers/cobra-cli@sha256:e5f61d4c00e066815dc98ce8f949aeded739b97f8f69c234ba33d1f07be8c081",
       "integrity": "sha256:e5f61d4c00e066815dc98ce8f949aeded739b97f8f69c234ba33d1f07be8c081"
+    },
+    "ghcr.io/warrenbuckley/codespace-features/sqlite:1": {
+      "version": "1.0.0",
+      "resolved": "ghcr.io/warrenbuckley/codespace-features/sqlite@sha256:4fdf50a6929f918c8208efc7416b6505f5ca085d71e37c3003367ed2855bbf76",
+      "integrity": "sha256:4fdf50a6929f918c8208efc7416b6505f5ca085d71e37c3003367ed2855bbf76"
     }
   }
 }

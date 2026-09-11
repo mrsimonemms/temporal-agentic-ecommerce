@@ -6,6 +6,7 @@ repos:
         args:
           - --autofix
           - --no-sort-keys
+        exclude: tsconfig
       - id: check-json
       - id: check-yaml
         args:

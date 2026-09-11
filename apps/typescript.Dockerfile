@@ -8,8 +8,6 @@ ENV GIT_COMMIT="${GIT_COMMIT}"
 ENV VERSION="${VERSION}"
 COPY --chown=node:node . .
 ENV HOST=0.0.0.0
-ENV PORT=5173
-EXPOSE 5173
 CMD [ "npm", "run", "dev" ]
 
 FROM node:lts-alpine AS builder

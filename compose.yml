@@ -1,7 +1,48 @@
 services:
+  api: &typescript_app
+    build:
+      context: apps/api
+      dockerfile: ../typescript.Dockerfile
+      target: dev
+    environment:
+      ALLOW_INSECURE_PROFILE_URLS: "true"
+      DB_URI: mongodb://mongodb:27017/mongodb
+      LOG_LEVEL: "${LOG_LEVEL:-debug}"
+      PORT: "9999"
+      REQUIRE_SIGNATURES: "true"
+      SCHEMA_URL: http://localhost:9999 # Matches the URL we're hosting the API on
+      TEMPORAL_ADDRESS: temporal:7233
+      WEBHOOK_SIGNING_KEY: /keys/webhook-signing-key.pem
+    volumes:
+      - ./apps/api:/home/node/app
+      - apiapp_node_modules:/home/node/app/node_modules
+      - signing_key:/keys:ro
+    ports:
+      - 9999:9999
+    depends_on:
+      orderworker:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
+      temporal:
+        condition: service_healthy
+      webhook-key-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    pre_start:
+      - command:
+          - npm
+          - ci
+
   webapp:
+    <<: *typescript_app
     build:
       context: apps/web
+      dockerfile: ../typescript.Dockerfile
       target: dev
     volumes:
       - ./apps/web:/home/node/app
@@ -9,9 +50,7 @@ services:
     ports:
       - 5173:5173
     depends_on:
-      temporal:
-        condition: service_healthy
-      orderworker:
+      api:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5173/api/health"]
@@ -47,6 +86,31 @@ services:
       timeout: 10s
       retries: 3
 
+  webhook-key-init:
+    image: alpine/openssl
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -eu
+
+        if [ ! -f /keys/webhook-signing-key.pem ]; then
+          openssl genpkey \
+            -algorithm ED25519 \
+            -out /keys/webhook-signing-key.pem
+
+          chown 1000:1000 /keys/webhook-signing-key.pem
+          chmod 600 /keys/webhook-signing-key.pem
+        fi
+    volumes:
+      - signing_key:/keys
+
+  mongodb:
+    image: mongo:7
+    ports:
+      - 27017:27017
+
   temporal:
     image: temporalio/temporal
     ports:
@@ -60,4 +124,6 @@ services:
       retries: 3
 
 volumes:
+  apiapp_node_modules:
   webapp_node_modules:
+  signing_key:

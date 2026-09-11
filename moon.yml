@@ -1,5 +1,9 @@
 id: root
 tasks:
+  mongodb:
+    command: docker run -p 27017:27017 --rm mongo:7
+    options:
+      persistent: true
   temporal:
     command: temporal server start-dev
     options:

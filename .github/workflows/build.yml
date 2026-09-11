@@ -80,9 +80,12 @@ jobs:
       fail-fast: true
       matrix:
         include:
+          - project: apps/api
+            name: api
+            dockerfile: apps/typescript.Dockerfile
           - project: apps/web
             name: web
-            dockerfile: apps/web/Dockerfile
+            dockerfile: apps/typescript.Dockerfile
           - project: workers/order
             name: order
             dockerfile: workers/go.Dockerfile
