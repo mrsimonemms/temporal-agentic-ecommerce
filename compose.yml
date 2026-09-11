@@ -1,0 +1,63 @@
+services:
+  webapp:
+    build:
+      context: apps/web
+      target: dev
+    volumes:
+      - ./apps/web:/home/node/app
+      - webapp_node_modules:/home/node/app/node_modules
+    ports:
+      - 5173:5173
+    depends_on:
+      temporal:
+        condition: service_healthy
+      orderworker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173/api/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    pre_start:
+      - command:
+          - npm
+          - ci
+
+  orderworker:
+    build:
+      context: workers/order
+      dockerfile: ../go.Dockerfile
+      target: builder
+      args:
+        PROJECT_NAME: order
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-debug}"
+      TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS:-temporal:7233}
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-default}
+      TEMPORAL_API_KEY: ${TEMPORAL_API_KEY:-}
+      TEMPORAL_TLS: ${TEMPORAL_TLS:-false}
+    volumes:
+      - ./workers/order:/go/app
+    depends_on:
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/readyz"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
+  temporal:
+    image: temporalio/temporal
+    ports:
+      - 7233:7233
+      - 8233:8233
+    command: server start-dev --ip 0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  webapp_node_modules:
