@@ -13,6 +13,7 @@ Thumbs.db
 .claude
 go.work.sum
 
+apps/api/databases/*.db
 workers/*/app
 
 # moon

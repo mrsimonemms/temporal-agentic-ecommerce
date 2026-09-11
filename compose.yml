@@ -1,7 +1,34 @@
 services:
+  api: &typescript_app
+    build:
+      context: apps/api
+      dockerfile: ../typescript.Dockerfile
+      target: dev
+    volumes:
+      - ./apps/api:/home/node/app
+      - apiapp_node_modules:/home/node/app/node_modules
+    ports:
+      - 9999:9999
+    depends_on:
+      orderworker:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    pre_start:
+      - command:
+          - npm
+          - ci
+
   webapp:
+    <<: *typescript_app
     build:
       context: apps/web
+      dockerfile: ../typescript.Dockerfile
       target: dev
     volumes:
       - ./apps/web:/home/node/app
@@ -9,9 +36,7 @@ services:
     ports:
       - 5173:5173
     depends_on:
-      temporal:
-        condition: service_healthy
-      orderworker:
+      api:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5173/api/health"]
@@ -60,4 +85,5 @@ services:
       retries: 3
 
 volumes:
+  apiapp_node_modules:
   webapp_node_modules:

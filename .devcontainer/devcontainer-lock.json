@@ -19,6 +19,11 @@
       "version": "1.0.0",
       "resolved": "ghcr.io/mrsimonemms/devcontainers/cobra-cli@sha256:e5f61d4c00e066815dc98ce8f949aeded739b97f8f69c234ba33d1f07be8c081",
       "integrity": "sha256:e5f61d4c00e066815dc98ce8f949aeded739b97f8f69c234ba33d1f07be8c081"
+    },
+    "ghcr.io/warrenbuckley/codespace-features/sqlite:1": {
+      "version": "1.0.0",
+      "resolved": "ghcr.io/warrenbuckley/codespace-features/sqlite@sha256:4fdf50a6929f918c8208efc7416b6505f5ca085d71e37c3003367ed2855bbf76",
+      "integrity": "sha256:4fdf50a6929f918c8208efc7416b6505f5ca085d71e37c3003367ed2855bbf76"
     }
   }
 }

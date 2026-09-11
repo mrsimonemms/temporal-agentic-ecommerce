@@ -1,0 +1,9 @@
+language: typescript
+layer: application
+tasks:
+  dev:
+    command: npm run dev
+    deps:
+      - root:temporal
+    options:
+      runInCI: false
