@@ -10,4 +10,4 @@ vcs:
   provider: "github"
   hooks:
     pre-commit:
-      - moon run order:lint web:format
+      - moon run api:format order:lint web:format
