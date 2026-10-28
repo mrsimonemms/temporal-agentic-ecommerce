@@ -11,6 +11,7 @@ import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify
 
 import { AppModule } from './app.module';
 import loggerConfig from './config/logger';
+import { setupSwagger } from './swagger';
 
 const logger = new Logger('bootstrap');
 
@@ -34,6 +35,8 @@ async function bootstrap() {
       }),
     )
     .useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+
+  setupSwagger(app);
 
   await app.listen(config.getOrThrow<number>('server.port'), config.getOrThrow('server.host'));
 }

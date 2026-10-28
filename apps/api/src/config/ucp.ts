@@ -38,7 +38,7 @@ export default registerAs('ucp', (): UcpProfileDocument => {
             spec: `https://ucp.dev/${ucpVersion}/specification/shopping/order`,
             schema: `https://ucp.dev/${ucpVersion}/schemas/shopping/order.json`,
             config: {
-              webhook_url: `${schemaUrl.origin}/webhooks/ucp/orders`,
+              webhook_url: `${schemaUrl.origin}/v1/webhooks/ucp/orders`,
             },
           },
         ],

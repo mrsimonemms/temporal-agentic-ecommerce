@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 import { Controller, Get, Inject, VERSION_NEUTRAL } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { HealthCheck, HealthCheckService, MongooseHealthIndicator } from '@nestjs/terminus';
 
 import { TemporalService } from '../temporal/temporal.service';
 
+@ApiTags('Health')
 @Controller({
   path: 'health',
   version: VERSION_NEUTRAL,
@@ -33,7 +35,14 @@ export class HealthController {
   private readonly temporal: TemporalService;
 
   @Get()
+  // Response schemas for 200 and 503 are documented by @HealthCheck()
   @HealthCheck()
+  @ApiOperation({
+    summary: 'Check service health',
+    description:
+      'Checks MongoDB and Temporal connectivity, allowing each check 1 second. Returns HTTP 503 ' +
+      'when either is unavailable. This path is not versioned.',
+  })
   check() {
     // Allow 1 second before timeout
     const timeout = 1000;
