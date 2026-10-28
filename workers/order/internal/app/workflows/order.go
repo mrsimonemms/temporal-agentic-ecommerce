@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order/internal/app/activities"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -21,9 +22,22 @@ const (
 type OrderStatus string
 
 const (
-	OrderStatusConfirmed OrderStatus = "confirmed"
-	OrderStatusFulfilled OrderStatus = "fulfilled"
+	OrderStatusReservingInventory OrderStatus = "reserving_inventory"
+	OrderStatusConfirmed          OrderStatus = "confirmed"
+	OrderStatusFulfilled          OrderStatus = "fulfilled"
 )
+
+// inventoryActivityOptions retries the inventory reservation quickly enough to
+// be visible in a live demonstration. Attempts are unlimited: the Order waits
+// for the inventory service to recover rather than failing.
+var inventoryActivityOptions = workflow.ActivityOptions{
+	StartToCloseTimeout: 10 * time.Second,
+	RetryPolicy: &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2,
+		MaximumInterval:    5 * time.Second,
+	},
+}
 
 const errTypeInvalidInput = "InvalidOrderInput"
 
@@ -44,13 +58,21 @@ type OrderLine struct {
 	UnitPrice int64  `json:"unitPrice"`
 }
 
+// DemoOptions are demo-only controls for simulating downstream behaviour.
+// They are not part of the commercial Order.
+type DemoOptions struct {
+	// Number of inventory reservation attempts that fail before succeeding
+	InventoryFailures int32 `json:"inventoryFailures,omitempty"`
+}
+
 // OrderInput is the protocol-agnostic command to create an Order. Channels
 // (eg, UCP) are responsible for mapping into this structure.
 type OrderInput struct {
-	ID       string      `json:"id"`
-	Buyer    Buyer       `json:"buyer"`
-	Currency string      `json:"currency"`
-	Lines    []OrderLine `json:"lines"`
+	ID       string       `json:"id"`
+	Buyer    Buyer        `json:"buyer"`
+	Currency string       `json:"currency"`
+	Lines    []OrderLine  `json:"lines"`
+	Demo     *DemoOptions `json:"demo,omitempty"`
 }
 
 // Order is the current state of the Order held by the Workflow
@@ -63,6 +85,8 @@ type Order struct {
 	Total       int64       `json:"total"`
 	CreatedAt   time.Time   `json:"createdAt"`
 	FulfilledAt *time.Time  `json:"fulfilledAt,omitempty"`
+	// Set once inventory has been reserved for every line
+	InventoryReservationID string `json:"inventoryReservationId,omitempty"`
 }
 
 // MarkFulfilledSignal is the payload of the SignalMarkFulfilled Signal
@@ -96,6 +120,9 @@ func (i *OrderInput) validate() error {
 			errs = append(errs, fmt.Errorf("line %d: unitPrice cannot be negative", k))
 		}
 	}
+	if i.Demo != nil && i.Demo.InventoryFailures < 0 {
+		errs = append(errs, errors.New("demo inventoryFailures cannot be negative"))
+	}
 	return errors.Join(errs...)
 }
 
@@ -107,7 +134,7 @@ func newOrder(ctx workflow.Context, input *OrderInput) *Order {
 
 	return &Order{
 		ID:        input.ID,
-		Status:    OrderStatusConfirmed,
+		Status:    OrderStatusReservingInventory,
 		Buyer:     input.Buyer,
 		Currency:  input.Currency,
 		Lines:     input.Lines,
@@ -116,9 +143,24 @@ func newOrder(ctx workflow.Context, input *OrderInput) *Order {
 	}
 }
 
-// OrderWorkflow is an Entity Workflow representing a single Order. It remains
-// open after fulfilment because an Order may later be subject to returns,
-// refunds or amendments. It only completes if cancelled.
+func reserveInventory(ctx workflow.Context, input *OrderInput) workflow.Future {
+	lines := make([]activities.ReservationLine, len(input.Lines))
+	for k, l := range input.Lines {
+		lines[k] = activities.ReservationLine{LineID: l.ID, ProductID: l.ProductID, Quantity: l.Quantity}
+	}
+
+	req := activities.ReserveInventoryInput{OrderID: input.ID, Lines: lines}
+	if input.Demo != nil {
+		req.SimulatedFailures = input.Demo.InventoryFailures
+	}
+
+	var a *activities.Activities
+	return workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, inventoryActivityOptions), a.ReserveInventory, req)
+}
+
+// OrderWorkflow is an Entity Workflow representing a single Order. It reserves
+// inventory, then remains open after fulfilment because an Order may later be
+// subject to returns, refunds or amendments. It only completes if cancelled.
 func OrderWorkflow(ctx workflow.Context, input *OrderInput) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("Starting OrderWorkflow")
@@ -138,7 +180,20 @@ func OrderWorkflow(ctx workflow.Context, input *OrderInput) error {
 		return fmt.Errorf("error registering %s query handler: %w", QueryGetOrder, err)
 	}
 
+	// Activity retries are handled by Temporal. The future only resolves with an
+	// error if the Workflow is cancelled or the error is non-retryable.
+	var reservationErr error
 	selector := workflow.NewSelector(ctx)
+	selector.AddFuture(reserveInventory(ctx, input), func(f workflow.Future) {
+		var reservation activities.InventoryReservation
+		if reservationErr = f.Get(ctx, &reservation); reservationErr != nil {
+			return
+		}
+
+		order.Status = OrderStatusConfirmed
+		order.InventoryReservationID = reservation.ID
+		logger.Info("Inventory reserved", "orderId", order.ID, "reservationId", reservation.ID)
+	})
 	selector.AddReceive(workflow.GetSignalChannel(ctx, SignalMarkFulfilled), func(c workflow.ReceiveChannel, _ bool) {
 		var signal MarkFulfilledSignal
 		c.Receive(ctx, &signal)
@@ -158,6 +213,10 @@ func OrderWorkflow(ctx workflow.Context, input *OrderInput) error {
 	// Keep processing events until the Workflow is cancelled
 	for ctx.Err() == nil {
 		selector.Select(ctx)
+
+		if reservationErr != nil && ctx.Err() == nil {
+			return fmt.Errorf("error reserving inventory: %w", reservationErr)
+		}
 	}
 
 	logger.Info("OrderWorkflow cancelled", "orderId", order.ID, "status", order.Status)

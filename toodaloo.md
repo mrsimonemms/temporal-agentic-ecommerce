@@ -5,4 +5,3 @@
 | File | Line Number | Author | Message |
 | --- | --- | --- | --- |
 | [workers/order/cmd/worker.go](workers/order/cmd/worker.go#L47) | 47 | Simon Emms <simon@simonemms.com> | register workflows |
-| [workers/order/internal/app/activities/activities.go](workers/order/internal/app/activities/activities.go#L7) | 7 | Simon Emms <simon@simonemms.com> | remove when we have a real activity |
