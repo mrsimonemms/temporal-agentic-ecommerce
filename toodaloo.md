@@ -4,7 +4,7 @@
 
 | File | Line Number | Author | Message |
 | --- | --- | --- | --- |
-| [apps/api/src/ucp/ucp.controller.ts](apps/api/src/ucp/ucp.controller.ts#L15) | 15 | Simon Emms <simon@simonemms.com> | stubbed |
-| [apps/api/src/ucp/ucp.controller.ts](apps/api/src/ucp/ucp.controller.ts#L23) | 23 | Simon Emms <simon@simonemms.com> | stubbed |
+| [apps/api/src/ucp/ucp.controller.ts](apps/api/src/ucp/ucp.controller.ts#L25) | 25 | Simon Emms <simon@simonemms.com> | stubbed |
+| [apps/api/src/ucp/ucp.controller.ts](apps/api/src/ucp/ucp.controller.ts#L42) | 42 | Simon Emms <simon@simonemms.com> | stubbed |
 | [workers/order/cmd/worker.go](workers/order/cmd/worker.go#L47) | 47 | Simon Emms <simon@simonemms.com> | register workflows |
 | [workers/order/internal/app/activities/activities.go](workers/order/internal/app/activities/activities.go#L7) | 7 | Simon Emms <simon@simonemms.com> | remove when we have a real activity |

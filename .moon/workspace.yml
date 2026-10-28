@@ -11,3 +11,4 @@ vcs:
   hooks:
     pre-commit:
       - moon run api:format order:lint web:format
+      - pre-commit run
