@@ -303,6 +303,35 @@ documentation.
 Swagger/OpenAPI documentation belongs exclusively to `apps/api`. Do not
 introduce Swagger or OpenAPI tooling elsewhere in the repository.
 
+### Svelte development and MCP
+
+When working on `apps/web`, use the configured Svelte MCP server as the
+authoritative source for current Svelte 5 and SvelteKit framework guidance.
+
+Before implementing or substantially modifying Svelte components:
+
+- Inspect the existing application and its conventions.
+- Consult the Svelte MCP documentation tools for the relevant Svelte 5 and
+  SvelteKit APIs.
+- Follow current Svelte 5 patterns, including runes where appropriate.
+- Use the Svelte MCP validation/autofix tools on new or modified Svelte
+  components where available.
+- Address all actionable diagnostics before considering the task complete.
+
+Do not blindly apply automated fixes. Review proposed changes and preserve
+intended behaviour.
+
+Do not introduce deprecated Svelte patterns, unnecessary dependencies or
+additional frameworks.
+
+The Svelte MCP server provides framework guidance and validation. It does not
+override this document, the existing application architecture or the project's
+quality gates.
+
+If the MCP server is unavailable, report that limitation and continue using
+established project conventions. Do not claim MCP validation was performed when
+it was not.
+
 ### Quality gates are mandatory
 
 All applicable formatting, linting, build and test checks must pass before work
