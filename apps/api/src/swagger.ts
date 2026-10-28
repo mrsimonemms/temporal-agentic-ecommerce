@@ -43,6 +43,19 @@ const apiSchemas = {
       },
     },
   },
+  // Default NestJS HTTP error body, used by demo-only endpoints
+  HttpError: {
+    type: 'object',
+    required: ['statusCode', 'message'],
+    properties: {
+      statusCode: { type: 'integer' },
+      message: {
+        oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        description: 'A message, or one message per failed validation constraint',
+      },
+      error: { type: 'string' },
+    },
+  },
 } satisfies Record<string, SchemaObject>;
 
 export type SchemaName = keyof typeof ucpSchemas | keyof typeof apiSchemas;

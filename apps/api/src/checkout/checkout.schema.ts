@@ -64,6 +64,15 @@ export class CheckoutOrder {
   permalinkUrl: string;
 }
 
+// Demo-only configuration applied when the checkout places its Order. Never
+// exposed through UCP.
+@Schema({ _id: false })
+export class CheckoutDemo {
+  // Inventory reservation attempts that fail before succeeding
+  @Prop({ type: Number, required: true, min: 0 })
+  inventoryFailures: number;
+}
+
 @Schema({ collection: 'checkouts', timestamps: true })
 export class Checkout {
   @Prop({ type: String, required: true })
@@ -86,6 +95,9 @@ export class Checkout {
 
   @Prop({ type: SchemaFactory.createForClass(CheckoutOrder) })
   order?: CheckoutOrder;
+
+  @Prop({ type: SchemaFactory.createForClass(CheckoutDemo) })
+  demo?: CheckoutDemo;
 }
 
 export const CheckoutSchema = SchemaFactory.createForClass(Checkout);

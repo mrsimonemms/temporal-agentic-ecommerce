@@ -62,6 +62,7 @@ describe('OpenAPI document', () => {
     ['/v1/checkout-sessions', 'post'],
     ['/v1/checkout-sessions/{id}', 'get'],
     ['/v1/checkout-sessions/{id}/complete', 'post'],
+    ['/v1/demo/checkout-sessions/{checkoutId}/inventory-failures', 'put'],
     ['/v1/demo/orders/{id}/fulfil', 'post'],
     ['/v1/orders/{id}', 'get'],
   ];
@@ -136,8 +137,8 @@ describe('OpenAPI document', () => {
     });
 
     const res = await app.inject({
-      method: method.toUpperCase() as 'GET' | 'POST',
-      url: path.replace('{id}', path.includes('orders') ? 'ord_123' : 'chk_missing'),
+      method: method.toUpperCase() as 'GET' | 'POST' | 'PUT',
+      url: path.replace(/\{\w+\}/, path.includes('orders') ? 'ord_123' : 'chk_missing'),
       payload: method === 'post' ? {} : undefined,
     });
 
@@ -252,6 +253,38 @@ describe('OpenAPI document', () => {
     );
   });
 
+  it('documents the demo-only inventory failure configuration', () => {
+    const op = operation(
+      document,
+      '/v1/demo/checkout-sessions/{checkoutId}/inventory-failures',
+      'put',
+    );
+
+    expect(op.tags).toEqual(['Demo']);
+    expect(op.summary).toContain('demo only');
+    expect(op.description).toContain('not part of UCP');
+    expect(op.parameters).toContainEqual(
+      expect.objectContaining({ name: 'checkoutId', in: 'path', required: true }),
+    );
+    expect(op.requestBody?.content['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/InventoryFailuresDto',
+    });
+    expect(op.requestBody?.content['application/json'].examples?.twoFailures.value).toEqual({
+      failures: 2,
+    });
+    expect(Object.keys(op.responses).sort()).toEqual(['200', '400', '404', '409']);
+    for (const status of ['400', '404', '409']) {
+      expect(op.responses[status].content?.['application/json'].schema).toEqual({
+        $ref: '#/components/schemas/HttpError',
+      });
+    }
+
+    expect(document.components?.schemas?.InventoryFailuresDto).toMatchObject({
+      required: ['failures'],
+      properties: { failures: { type: 'integer', minimum: 0, maximum: 2147483647 } },
+    });
+  });
+
   it('does not forbid unknown properties that the UCP schemas strip', () => {
     expect(JSON.stringify(document.components?.schemas?.CheckoutCompleteRequest)).not.toContain(
       '"additionalProperties":false',
@@ -299,5 +332,35 @@ describe('OpenAPI document', () => {
     expect(completed.statusCode).toBe(200);
     const checkout = CheckoutResponseSchema.parse(completed.json());
     expect(checkout.status).toBe('completed');
+  });
+
+  it('provides examples that configure simulated inventory failures for a checkout', async () => {
+    const examples = (path: string, method: string) =>
+      operation(document, path, method).requestBody?.content['application/json'].examples ?? {};
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/v1/checkout-sessions',
+      payload: examples('/v1/checkout-sessions', 'post').checkout.value,
+    });
+    const checkoutId: string = created.json().id;
+
+    const configured = await app.inject({
+      method: 'PUT',
+      url: `/v1/demo/checkout-sessions/${checkoutId}/inventory-failures`,
+      payload: examples('/v1/demo/checkout-sessions/{checkoutId}/inventory-failures', 'put')
+        .twoFailures.value,
+    });
+    expect(configured.statusCode).toBe(200);
+
+    const completed = await app.inject({
+      method: 'POST',
+      url: `/v1/checkout-sessions/${checkoutId}/complete`,
+      payload: examples('/v1/checkout-sessions/{id}/complete', 'post').payment.value,
+    });
+    expect(CheckoutResponseSchema.parse(completed.json()).status).toBe('completed');
+    expect(temporal.startOrderWorkflow).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ demo: { inventoryFailures: 2 } }),
+    );
   });
 });

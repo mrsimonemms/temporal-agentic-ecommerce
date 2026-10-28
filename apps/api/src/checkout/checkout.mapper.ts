@@ -27,5 +27,9 @@ export function toOrderInput(checkout: Checkout): OrderInput {
       quantity: lineItem.quantity,
       unitPrice: lineItem.unitPrice,
     })),
+    // Omitted unless failures are configured, matching the Go default of none
+    demo: checkout.demo?.inventoryFailures
+      ? { inventoryFailures: checkout.demo.inventoryFailures }
+      : undefined,
   };
 }

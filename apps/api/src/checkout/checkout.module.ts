@@ -17,5 +17,6 @@ import { CheckoutService } from './checkout.service';
   ],
   controllers: [CheckoutController],
   providers: [CheckoutService],
+  exports: [CheckoutService],
 })
 export class CheckoutModule {}

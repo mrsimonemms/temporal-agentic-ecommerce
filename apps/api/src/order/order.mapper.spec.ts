@@ -58,6 +58,18 @@ describe('toUcpOrder', () => {
     ]);
   });
 
+  it('reports an Order still reserving inventory as processing', () => {
+    const ucpOrder = map({ ...order, status: 'reserving_inventory' });
+
+    expect(OrderSchema.safeParse(ucpOrder).success).toBe(true);
+    expect(ucpOrder.line_items.map((l) => [l.status, l.quantity])).toEqual([
+      ['processing', { original: 2, total: 2, fulfilled: 0 }],
+      ['processing', { original: 1, total: 1, fulfilled: 0 }],
+    ]);
+    // The internal Workflow status is not exposed through UCP
+    expect(JSON.stringify(ucpOrder)).not.toContain('reserving_inventory');
+  });
+
   it('reports every line of a fulfilled Order as fully fulfilled', () => {
     const ucpOrder = map({ ...order, status: 'fulfilled', fulfilledAt: '2026-10-28T15:00:00Z' });
 

@@ -17,7 +17,10 @@ export class FakeCheckoutModel {
     return this.query(this.docs.get(id) ?? null);
   }
 
-  findOneAndUpdate(filter: { _id: string; status: string }, update: { $set: Partial<Checkout> }) {
+  findOneAndUpdate(
+    filter: { _id: string; status: string | { $in: string[] } },
+    update: { $set: Partial<Checkout> },
+  ) {
     if (this.failNextUpdateTo && update.$set.status === this.failNextUpdateTo) {
       this.failNextUpdateTo = undefined;
       return {
@@ -28,7 +31,8 @@ export class FakeCheckoutModel {
     }
 
     const doc = this.docs.get(filter._id);
-    if (!doc || doc.status !== filter.status) {
+    const statuses = typeof filter.status === 'string' ? [filter.status] : filter.status.$in;
+    if (!doc || !statuses.includes(doc.status)) {
       return this.query(null);
     }
 
@@ -53,8 +57,10 @@ export class FakeTemporalService {
 
   readonly startOrderWorkflow = vi.fn(async (input: OrderInput) => {
     if (!this.workflows.has(input.id)) {
+      // Demo options are not part of the Order state
+      const { demo: _demo, ...order } = structuredClone(input);
       this.workflows.set(input.id, {
-        ...structuredClone(input),
+        ...order,
         status: 'confirmed',
         total: input.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0),
         createdAt: ORDER_CREATED_AT,

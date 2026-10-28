@@ -1,9 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import {
   type CheckoutCompleteRequest,
   type CheckoutCreateRequest,
   type CheckoutResponse,
+  type CheckoutResponseStatus,
   type ErrorResponse,
   type MessageError,
   type SelectedPaymentInstrument,
@@ -15,7 +16,16 @@ import { OrderService } from '../order/order.service';
 import { UcpService } from '../ucp/ucp.service';
 import { CATALOGUE_CURRENCY, findProduct } from './catalogue';
 import { toOrderInput } from './checkout.mapper';
-import { Checkout, CheckoutLineItem, CheckoutOrder, CheckoutPayment } from './checkout.schema';
+import {
+  Checkout,
+  CheckoutDemo,
+  CheckoutLineItem,
+  CheckoutOrder,
+  CheckoutPayment,
+} from './checkout.schema';
+
+// Statuses in which completion has not started, so no Order Workflow exists
+const CONFIGURABLE_STATUSES: CheckoutResponseStatus[] = ['incomplete', 'ready_for_complete'];
 
 @Injectable()
 export class CheckoutService {
@@ -183,6 +193,36 @@ export class CheckoutService {
     }
 
     return this.placeOrder(accepted);
+  }
+
+  // Demo-only: configures how many inventory reservation attempts fail for the
+  // Order placed when this checkout completes. This is not a UCP operation.
+  // Changes are rejected once completion has started because the Order
+  // Workflow may already have been started with the previous configuration.
+  async setInventoryFailures(id: string, failures: number): Promise<CheckoutDemo> {
+    const demo: CheckoutDemo = { inventoryFailures: failures };
+
+    const updated = await this.checkouts
+      .findOneAndUpdate(
+        { _id: id, status: { $in: CONFIGURABLE_STATUSES } },
+        { $set: { demo } },
+        { new: true },
+      )
+      .lean<Checkout>()
+      .exec();
+
+    if (updated) {
+      return demo;
+    }
+
+    const checkout = await this.checkouts.findById(id).lean<Checkout>().exec();
+    if (!checkout) {
+      throw new NotFoundException(`Checkout "${id}" was not found`);
+    }
+
+    throw new ConflictException(
+      `Inventory failures cannot be configured while the checkout status is "${checkout.status}"`,
+    );
   }
 
   // Starts the Order Workflow and then records the Order against the

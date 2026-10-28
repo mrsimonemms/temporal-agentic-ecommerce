@@ -28,15 +28,24 @@ export interface OrderLine {
   unitPrice: number;
 }
 
+// Demo-only controls for simulating downstream behaviour. Not part of the
+// commercial Order.
+export interface OrderDemoOptions {
+  // Number of inventory reservation attempts that fail before succeeding.
+  // The Go field is an int32.
+  inventoryFailures?: number;
+}
+
 export interface OrderInput {
   id: string;
   buyer: OrderBuyer;
   currency: string;
   lines: OrderLine[];
+  demo?: OrderDemoOptions;
 }
 
 // Matches workflows.OrderStatus
-export type OrderStatus = 'confirmed' | 'fulfilled';
+export type OrderStatus = 'reserving_inventory' | 'confirmed' | 'fulfilled';
 
 // Current Order state returned by the getOrder Query. Timestamps are RFC 3339
 // strings as serialised by Go.
@@ -49,4 +58,5 @@ export interface Order {
   total: number;
   createdAt: string;
   fulfilledAt?: string;
+  inventoryReservationId?: string;
 }

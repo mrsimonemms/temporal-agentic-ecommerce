@@ -58,4 +58,17 @@ describe('toOrderInput', () => {
       `Checkout "${checkout._id}" has no buyer email`,
     );
   });
+
+  it('passes configured inventory failures to the Go DemoOptions', () => {
+    const input = toOrderInput({ ...checkout, demo: { inventoryFailures: 2 } });
+
+    expect(JSON.parse(JSON.stringify(input)).demo).toStrictEqual({ inventoryFailures: 2 });
+  });
+
+  it('omits demo options when no failures are configured', () => {
+    expect(JSON.parse(JSON.stringify(toOrderInput(checkout)))).not.toHaveProperty('demo');
+    expect(
+      JSON.parse(JSON.stringify(toOrderInput({ ...checkout, demo: { inventoryFailures: 0 } }))),
+    ).not.toHaveProperty('demo');
+  });
 });
