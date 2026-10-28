@@ -1,6 +1,6 @@
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [
@@ -17,5 +17,8 @@ export default defineConfig({
   server: {
     host: process.env.HOST ?? '0.0.0.0',
     port: Number(process.env.PORT ?? 5173),
+  },
+  test: {
+    include: ['src/**/*.spec.ts'],
   },
 });

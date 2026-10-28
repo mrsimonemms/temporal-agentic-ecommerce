@@ -44,6 +44,9 @@ services:
       context: apps/web
       dockerfile: ../typescript.Dockerfile
       target: dev
+    environment:
+      API_URL: http://api:9999 # Server-side only: the browser calls the dashboard, not the API
+      PORT: "5173"
     volumes:
       - ./apps/web:/home/node/app
       - webapp_node_modules:/home/node/app/node_modules

@@ -1,0 +1,173 @@
+:root {
+  --bg: #f2f3f5;
+  --surface: #ffffff;
+  --surface-muted: #f7f8fa;
+  --border: #e1e4e9;
+  --text: #111827;
+  --muted: #586174;
+
+  --accent: #4338ca;
+  --accent-hover: #3730a3;
+  --accent-soft: #eef0ff;
+
+  --info: #1d4ed8;
+  --info-soft: #e8efff;
+  --success: #157a3c;
+  --success-soft: #e5f5ea;
+  --warning: #a35a04;
+  --warning-soft: #fdf2df;
+  --danger: #b42318;
+  --danger-soft: #fdeceb;
+  --neutral: #4b5563;
+  --neutral-soft: #eceef1;
+
+  --radius: 0.75rem;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  /* Scales with the viewport: roughly 18px at 1920px wide, 15px at 1280px */
+  font-size: clamp(15px, 0.6rem + 0.45vw, 20px);
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  line-height: 1.45;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.panel-header h2 {
+  font-size: 1.5rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.eyebrow {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid transparent;
+  padding: 0.7rem 1.25rem;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button:focus-visible {
+  outline: 3px solid var(--accent-soft);
+  outline-offset: 2px;
+}
+
+.button.primary {
+  background: var(--accent);
+  color: #fff;
+  font-size: 1.1rem;
+  padding: 0.85rem 1.5rem;
+}
+
+.button.primary:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
+.button.secondary {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.button.secondary:not(:disabled):hover {
+  background: var(--surface-muted);
+}
+
+.notice {
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-left: 4px solid currentColor;
+}
+
+.notice.info {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.notice.success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.notice.warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.notice.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.notice p {
+  color: var(--text);
+}
+
+.notice strong {
+  color: inherit;
+}
