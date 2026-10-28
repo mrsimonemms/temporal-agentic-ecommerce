@@ -244,6 +244,79 @@ describe('DemoController fulfilment exceptions', () => {
     return app.inject({ method: 'GET', url: `/v1/orders/${orderId}` });
   }
 
+  describe('GET /v1/demo/orders/:orderId', () => {
+    function getState(orderId: string) {
+      return app.inject({ method: 'GET', url: `/v1/demo/orders/${orderId}` });
+    }
+
+    it('returns the Order Workflow state queried from Temporal', async () => {
+      const orderId = await placeOrder();
+
+      const res = await getState(orderId);
+
+      expect(res.statusCode).toBe(200);
+      const order = res.json();
+      expect(order.id).toBe(orderId);
+      expect(order.status).toBe('confirmed');
+      expect(order.lines.map((line: { id: string }) => line.id)).toEqual(['li_1', 'li_2']);
+      expect(temporal.getOrder).toHaveBeenCalledWith(orderId);
+    });
+
+    it('reports the outstanding exception and resolution history', async () => {
+      const orderId = await placeOrder();
+      await raise(orderId, exception);
+
+      const awaiting = (await getState(orderId)).json();
+      expect(awaiting.status).toBe('awaiting_intervention');
+      expect(awaiting.fulfilment.exception).toEqual({ ...exception, raisedAt: expect.any(String) });
+
+      await resolve(orderId, resolution);
+
+      const confirmed = (await getState(orderId)).json();
+      expect(confirmed.status).toBe('confirmed');
+      expect(confirmed.fulfilment.exception).toBeUndefined();
+      expect(confirmed.fulfilment.sources).toEqual([{ lineId: 'li_2', source: 'warehouse-north' }]);
+      expect(confirmed.fulfilment.resolutions).toHaveLength(1);
+    });
+
+    it('does not change the Order', async () => {
+      const orderId = await placeOrder();
+
+      await getState(orderId);
+
+      expect(temporal.markOrderFulfilled).not.toHaveBeenCalled();
+      expect(temporal.reportFulfilmentException).not.toHaveBeenCalled();
+      expect(temporal.resolveFulfilmentException).not.toHaveBeenCalled();
+      expect(temporal.workflows.get(orderId)?.status).toBe('confirmed');
+    });
+
+    it('returns 404 for an unknown Order', async () => {
+      const res = await getState('ord_missing');
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({
+        statusCode: 404,
+        error: 'Not Found',
+        message: 'Order "ord_missing" was not found',
+      });
+    });
+
+    it('returns 404 without querying Temporal for IDs not issued for a checkout', async () => {
+      const res = await getState('chk_123');
+
+      expect(res.statusCode).toBe(404);
+      expect(temporal.getOrder).not.toHaveBeenCalled();
+    });
+
+    it('fails with HTTP 500 when Temporal is unavailable', async () => {
+      temporal.getOrder.mockRejectedValueOnce(new Error('Temporal unavailable'));
+
+      const res = await getState('ord_123');
+
+      expect(res.statusCode).toBe(500);
+    });
+  });
+
   describe('POST /v1/demo/orders/:orderId/fulfilment-exception', () => {
     it('reports the exception and returns the Order awaiting intervention', async () => {
       const orderId = await placeOrder();

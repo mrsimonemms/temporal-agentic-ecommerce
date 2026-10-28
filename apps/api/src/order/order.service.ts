@@ -39,6 +39,21 @@ export class OrderService {
     return (await this.findOrder(id)) ?? this.ucp.notFound('Order', id);
   }
 
+  // Returns the internal Order Workflow state, including its operational
+  // status and fulfilment plan. Used by the demo controls: this is not a UCP
+  // Order and is never returned by the UCP endpoints.
+  async getOrderState(id: string): Promise<OrderState> {
+    if (!checkoutIdForOrder(id)) {
+      throw this.orderNotFound(id);
+    }
+
+    const order = await this.temporal.getOrder(id);
+    if (!order) {
+      throw this.orderNotFound(id);
+    }
+    return order;
+  }
+
   // Signals the Order Workflow to mark the Order as fulfilled and returns the
   // resulting Order. Used by the demo controls: this is not a UCP operation.
   async markOrderFulfilled(id: string): Promise<Order | ErrorResponse> {

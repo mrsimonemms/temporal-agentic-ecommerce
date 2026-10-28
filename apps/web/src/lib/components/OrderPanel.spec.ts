@@ -2,16 +2,10 @@ import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 
 import { orderFixture } from '../testing/fixtures';
+import { text } from '../testing/text';
 import OrderPanel from './OrderPanel.svelte';
 
 const pollIntervalMs = 2000;
-
-function text(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ');
-}
 
 describe('OrderPanel', () => {
   it('explains that no Order exists before checkout completes', () => {

@@ -14,7 +14,7 @@ export function apiBaseUrl(): string {
 }
 
 interface ProxyRequest {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PUT';
   body?: string;
 }
 

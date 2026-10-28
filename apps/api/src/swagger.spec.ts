@@ -64,6 +64,7 @@ describe('OpenAPI document', () => {
     ['/v1/checkout-sessions/{id}/complete', 'post'],
     ['/v1/demo/checkout-sessions/{checkoutId}/inventory-failures', 'put'],
     ['/v1/demo/orders/{id}/fulfil', 'post'],
+    ['/v1/demo/orders/{orderId}', 'get'],
     ['/v1/demo/orders/{orderId}/fulfilment-exception', 'post'],
     ['/v1/demo/orders/{orderId}/resolve-fulfilment-exception', 'post'],
     ['/v1/orders/{id}', 'get'],
@@ -338,6 +339,25 @@ describe('OpenAPI document', () => {
     expect((document.components!.schemas![body] as { required: string[] }).required).toEqual(
       required,
     );
+  });
+
+  it('documents the demo-only read-only Order Workflow state endpoint', () => {
+    const op = operation(document, '/v1/demo/orders/{orderId}', 'get');
+
+    expect(op.tags).toEqual(['Demo']);
+    expect(op.summary).toContain('demo only');
+    expect(op.description).toContain('not part of UCP');
+    expect(op.requestBody).toBeUndefined();
+    expect(op.parameters).toContainEqual(
+      expect.objectContaining({ name: 'orderId', in: 'path', required: true }),
+    );
+    expect(Object.keys(op.responses).sort()).toEqual(['200', '404', '500']);
+    expect(op.responses['200'].content?.['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/OrderStateDto',
+    });
+    expect(op.responses['404'].content?.['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/HttpError',
+    });
   });
 
   it('documents the Order Workflow state returned by the demo endpoints', () => {

@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBody,
@@ -91,6 +91,25 @@ export class DemoController {
   ): Promise<InventoryFailuresResponseDto> {
     const demo = await this.checkouts.setInventoryFailures(checkoutId, body.failures);
     return { checkoutId, failures: demo.inventoryFailures };
+  }
+
+  @Get('orders/:orderId')
+  @ApiOperation({
+    summary: 'Get the Order Workflow state (demo only)',
+    description:
+      'Demo-only endpoint, not part of UCP. Returns the current state of the Order Workflow, ' +
+      'queried with the `getOrder` Query. This is the internal operational view used to ' +
+      'observe the demo: it includes the Workflow status (`reserving_inventory`, `confirmed`, ' +
+      '`awaiting_intervention` or `fulfilled`), the inventory reservation and the fulfilment ' +
+      'plan, none of which are exposed by the UCP Order.\n\nRead-only: the Order is not ' +
+      'changed. This is not a UCP Order.',
+  })
+  @orderIdPathParam
+  @ApiOkResponse({ description: 'The current Order Workflow state', type: OrderStateDto })
+  @orderNotFoundResponse
+  @orderStateUnavailableResponse
+  getOrderState(@Param('orderId') orderId: string): Promise<OrderState> {
+    return this.orders.getOrderState(orderId);
   }
 
   @Post('orders/:id/fulfil')

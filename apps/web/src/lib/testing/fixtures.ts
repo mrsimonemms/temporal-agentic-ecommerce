@@ -1,5 +1,7 @@
 import type { CheckoutResponse, Order } from '@ucp-js/sdk';
 
+import type { OrderState } from '../demo';
+
 // Responses shaped like those returned by apps/api for the demo catalogue
 
 export function checkoutFixture(overrides: Partial<CheckoutResponse> = {}): CheckoutResponse {
@@ -88,3 +90,51 @@ export function orderFixture(
     ...overrides,
   } as Order;
 }
+
+// Internal Order Workflow state as returned by the demo endpoints
+export function orderStateFixture(overrides: Partial<OrderState> = {}): OrderState {
+  return {
+    id: 'ord_123',
+    status: 'confirmed',
+    buyer: { name: 'Jane Doe', email: 'jane@example.com' },
+    currency: 'GBP',
+    lines: [
+      {
+        id: 'li_1',
+        productId: 'sku_kettle',
+        title: 'Stainless Steel Kettle',
+        quantity: 1,
+        unitPrice: 3499,
+      },
+      {
+        id: 'li_2',
+        productId: 'sku_mug_set',
+        title: 'Stoneware Mug Set (4 pack)',
+        quantity: 2,
+        unitPrice: 2400,
+      },
+    ],
+    total: 8299,
+    createdAt: '2026-10-28T15:00:00Z',
+    inventoryReservationId: 'res_ord_123',
+    fulfilment: {},
+    ...overrides,
+  };
+}
+
+export const exceptionFixture = {
+  lineId: 'li_2',
+  reason: 'Supplier reports the item is unavailable at the selected warehouse',
+  raisedAt: '2026-10-28T15:01:00Z',
+};
+
+export const resolutionFixture = {
+  lineId: 'li_2',
+  reason: exceptionFixture.reason,
+  decision: 'alternative_source' as const,
+  alternativeSource: 'warehouse-north',
+  approvedBy: 'ops@example.com',
+  note: 'Same item, ships a day later',
+  raisedAt: exceptionFixture.raisedAt,
+  resolvedAt: '2026-10-28T15:02:00Z',
+};

@@ -1,5 +1,7 @@
 import type { CheckoutResponse, Order } from '@ucp-js/sdk';
 
+import type { OrderStatus } from './demo';
+
 export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
 
 export interface StatusDisplay {
@@ -53,4 +55,26 @@ export function orderStatus(order: Order): LineItemStatus {
     return [...statuses][0];
   }
   return statuses.has('fulfilled') || statuses.has('partial') ? 'partial' : 'processing';
+}
+
+const WORKFLOW_STATUSES: Record<OrderStatus, StatusDisplay> = {
+  reserving_inventory: { label: 'Reserving inventory', tone: 'info' },
+  confirmed: { label: 'Confirmed', tone: 'success' },
+  awaiting_intervention: { label: 'Awaiting intervention', tone: 'warning' },
+  fulfilled: { label: 'Fulfilled', tone: 'success' },
+};
+
+// Internal Order Workflow status, shown only in the demo operational view
+export function workflowStatus(status: OrderStatus): StatusDisplay {
+  return WORKFLOW_STATUSES[status];
+}
+
+export function formatTime(value: string | Date): string {
+  return new Date(value).toLocaleTimeString('en-GB');
+}
+
+// Outcome of a demo action, shown next to the control that triggered it
+export interface Feedback {
+  tone: 'success' | 'warning' | 'danger';
+  message: string;
 }

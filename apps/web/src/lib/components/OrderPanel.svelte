@@ -38,6 +38,10 @@
 
   let events = $derived(order?.fulfillment.events ?? []);
 
+  let every = $derived(
+    pollIntervalMs === 1000 ? 'every second' : `every ${pollIntervalMs / 1000} seconds`,
+  );
+
   function time(date: Date): string {
     return date.toLocaleTimeString('en-GB');
   }
@@ -66,7 +70,7 @@
     <div class="empty">
       {#if error}
         <p class="empty-title">Unable to load the Order</p>
-        <p>{error}. Retrying every {pollIntervalMs / 1000} seconds.</p>
+        <p>{error}. Retrying {every}.</p>
       {:else}
         <p class="empty-title">Loading Order…</p>
       {/if}
@@ -143,7 +147,7 @@
       {:else}
         Live
       {/if}
-      · refreshing every {pollIntervalMs / 1000} seconds
+      · refreshing {every}
       {#if updatedAt}
         · last updated {time(updatedAt)}
       {/if}
