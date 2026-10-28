@@ -1,10 +1,5 @@
-import { VersioningType } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { getModelToken } from '@nestjs/mongoose';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
+import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { OpenAPIObject } from '@nestjs/swagger';
-import { HealthCheckService, MongooseHealthIndicator } from '@nestjs/terminus';
-import { Test } from '@nestjs/testing';
 import {
   CheckoutCompleteRequestSchema,
   CheckoutCreateRequestSchema,
@@ -12,18 +7,10 @@ import {
   UcpProfileDocumentSchema,
 } from '@ucp-js/sdk';
 
-import { FakeCheckoutModel, FakeTemporalService } from '../test/fakes';
-import ucp from './config/ucp';
-import { HealthController } from './health/health.controller';
-import { createOpenApiDocument, setupSwagger } from './swagger';
-import { TemporalService } from './temporal/temporal.service';
-import { CheckoutController } from './ucp/checkout.controller';
-import { completeCheckoutExample, createCheckoutExample } from './ucp/checkout.examples';
-import { Checkout } from './ucp/checkout.schema';
-import { DemoController } from './ucp/demo.controller';
-import { OrderController } from './ucp/order.controller';
-import { UcpController } from './ucp/ucp.controller';
-import { UcpService } from './ucp/ucp.service';
+import { TestApp, closeTestApp, createTestApp } from '../test/app';
+import { FakeTemporalService } from '../test/fakes';
+import { completeCheckoutExample, createCheckoutExample } from './checkout/checkout.examples';
+import { createOpenApiDocument } from './swagger';
 
 type Operation = {
   summary?: string;
@@ -58,57 +45,25 @@ describe('OpenAPI document', () => {
   let document: OpenAPIObject;
   let temporal: FakeTemporalService;
 
+  let testApp: TestApp;
+
   beforeEach(async () => {
-    vi.stubEnv('SCHEMA_URL', 'http://localhost:9999');
-    temporal = new FakeTemporalService();
-
-    const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ ignoreEnvFile: true, load: [ucp] })],
-      controllers: [
-        UcpController,
-        CheckoutController,
-        OrderController,
-        DemoController,
-        HealthController,
-      ],
-      providers: [
-        UcpService,
-        { provide: getModelToken(Checkout.name), useValue: new FakeCheckoutModel() },
-        { provide: TemporalService, useValue: temporal },
-        {
-          provide: HealthCheckService,
-          useValue: { check: async () => ({ status: 'ok', info: {}, error: {}, details: {} }) },
-        },
-        { provide: MongooseHealthIndicator, useValue: {} },
-      ],
-    }).compile();
-
-    // Matches the versioning configured in main.ts
-    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-    app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-    setupSwagger(app);
-    await app.init();
-    await app.getHttpAdapter().getInstance().ready();
-
+    testApp = await createTestApp();
+    ({ app, temporal } = testApp);
     document = createOpenApiDocument(app);
   });
 
-  afterEach(async () => {
-    await app.close();
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => closeTestApp(testApp));
 
   const endpoints = [
     ['/.well-known/ucp', 'get'],
     ['/health', 'get'],
     ['/orders/{id}', 'get'],
+    ['/v1/checkout-sessions', 'post'],
+    ['/v1/checkout-sessions/{id}', 'get'],
+    ['/v1/checkout-sessions/{id}/complete', 'post'],
     ['/v1/demo/orders/{id}/fulfil', 'post'],
-    ['/v1/ucp', 'get'],
-    ['/v1/ucp/checkout-sessions', 'post'],
-    ['/v1/ucp/checkout-sessions/{id}', 'get'],
-    ['/v1/ucp/checkout-sessions/{id}/complete', 'post'],
-    ['/v1/ucp/orders/{id}', 'get'],
-    ['/v1/webhooks/ucp/orders', 'post'],
+    ['/v1/orders/{id}', 'get'],
   ];
 
   it('serves Swagger UI and the generated document', async () => {
@@ -127,6 +82,48 @@ describe('OpenAPI document', () => {
       .sort();
 
     expect(documented).toEqual([...endpoints].sort());
+  });
+
+  it('does not expose the removed /v1/ucp and webhook placeholder routes', async () => {
+    expect(
+      Object.keys(document.paths).filter((path) => /^\/v1\/ucp(\/|$)|webhooks/.test(path)),
+    ).toEqual([]);
+
+    for (const [method, url] of [
+      ['GET', '/v1/ucp'],
+      ['POST', '/v1/ucp/checkout-sessions'],
+      ['GET', '/v1/ucp/checkout-sessions/chk_123'],
+      ['POST', '/v1/ucp/checkout-sessions/chk_123/complete'],
+      ['GET', '/v1/ucp/orders/ord_123'],
+      ['POST', '/v1/webhooks/ucp/orders'],
+    ] as const) {
+      expect((await app.inject({ method, url, payload: {} })).statusCode).toBe(404);
+    }
+  });
+
+  it('serves every UCP operation relative to the advertised service endpoint', async () => {
+    const profile = UcpProfileDocumentSchema.parse(
+      (await app.inject({ method: 'GET', url: '/.well-known/ucp' })).json(),
+    );
+    const endpoint = profile.ucp.services?.['dev.ucp.shopping'][0].endpoint ?? '';
+
+    expect(endpoint).toBe('http://localhost:9999/v1');
+    for (const path of [
+      '/checkout-sessions',
+      '/checkout-sessions/{id}',
+      '/checkout-sessions/{id}/complete',
+      '/orders/{id}',
+    ]) {
+      expect(document.paths).toHaveProperty([`${new URL(endpoint).pathname}${path}`]);
+    }
+  });
+
+  it('does not advertise a webhook URL in the business profile', async () => {
+    const profile = (await app.inject({ method: 'GET', url: '/.well-known/ucp' })).json();
+
+    expect(profile.ucp.capabilities['dev.ucp.shopping.order']).toEqual([
+      expect.not.objectContaining({ config: expect.anything() }),
+    ]);
   });
 
   it.each(endpoints)('routes %s %s to an implemented handler', async (path, method) => {
@@ -167,7 +164,7 @@ describe('OpenAPI document', () => {
   });
 
   it('documents UCP request bodies and responses using the SDK schemas', () => {
-    const create = operation(document, '/v1/ucp/checkout-sessions', 'post');
+    const create = operation(document, '/v1/checkout-sessions', 'post');
     expect(create.requestBody?.content['application/json'].schema).toEqual({
       $ref: '#/components/schemas/CheckoutCreateRequest',
     });
@@ -181,7 +178,7 @@ describe('OpenAPI document', () => {
       $ref: '#/components/schemas/InvalidRequest',
     });
 
-    const complete = operation(document, '/v1/ucp/checkout-sessions/{id}/complete', 'post');
+    const complete = operation(document, '/v1/checkout-sessions/{id}/complete', 'post');
     expect(complete.requestBody?.content['application/json'].schema).toEqual({
       $ref: '#/components/schemas/CheckoutCompleteRequest',
     });
@@ -209,7 +206,7 @@ describe('OpenAPI document', () => {
   });
 
   it('documents Order retrieval using the SDK Order schema', () => {
-    const getOrder = operation(document, '/v1/ucp/orders/{id}', 'get');
+    const getOrder = operation(document, '/v1/orders/{id}', 'get');
 
     expect(getOrder.tags).toEqual(['UCP order']);
     expect(getOrder.parameters).toContainEqual(
@@ -276,9 +273,10 @@ describe('OpenAPI document', () => {
   });
 
   it('provides request examples that are valid and complete a checkout', async () => {
-    const createExample = operation(document, '/v1/ucp/checkout-sessions', 'post').requestBody
-      ?.content['application/json'].examples?.checkout.value;
-    const completeExample = operation(document, '/v1/ucp/checkout-sessions/{id}/complete', 'post')
+    const createExample = operation(document, '/v1/checkout-sessions', 'post').requestBody?.content[
+      'application/json'
+    ].examples?.checkout.value;
+    const completeExample = operation(document, '/v1/checkout-sessions/{id}/complete', 'post')
       .requestBody?.content['application/json'].examples?.payment.value;
 
     expect(createExample).toEqual(createCheckoutExample);
@@ -288,14 +286,14 @@ describe('OpenAPI document', () => {
 
     const created = await app.inject({
       method: 'POST',
-      url: '/v1/ucp/checkout-sessions',
+      url: '/v1/checkout-sessions',
       payload: createExample,
     });
     expect(created.statusCode).toBe(201);
 
     const completed = await app.inject({
       method: 'POST',
-      url: `/v1/ucp/checkout-sessions/${created.json().id}/complete`,
+      url: `/v1/checkout-sessions/${created.json().id}/complete`,
       payload: completeExample,
     });
     expect(completed.statusCode).toBe(200);

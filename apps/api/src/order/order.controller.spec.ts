@@ -1,19 +1,9 @@
-import { VersioningType } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { getModelToken } from '@nestjs/mongoose';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
-import { Test } from '@nestjs/testing';
+import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { ErrorResponseSchema, OrderSchema } from '@ucp-js/sdk';
 
-import { FakeCheckoutModel, FakeTemporalService } from '../../test/fakes';
-import ucp from '../config/ucp';
-import { TemporalService } from '../temporal/temporal.service';
-import { CheckoutController } from './checkout.controller';
-import { completeCheckoutExample } from './checkout.examples';
-import { Checkout } from './checkout.schema';
-import { DemoController } from './demo.controller';
-import { OrderController } from './order.controller';
-import { UcpService } from './ucp.service';
+import { TestApp, closeTestApp, createTestApp } from '../../test/app';
+import { FakeTemporalService } from '../../test/fakes';
+import { completeCheckoutExample } from '../checkout/checkout.examples';
 
 function expectOrder(body: unknown) {
   const result = OrderSchema.safeParse(body);
@@ -39,36 +29,20 @@ describe('OrderController and DemoController', () => {
   let app: NestFastifyApplication;
   let temporal: FakeTemporalService;
 
+  let testApp: TestApp;
+
   beforeEach(async () => {
-    vi.stubEnv('SCHEMA_URL', 'http://localhost:9999');
-    temporal = new FakeTemporalService();
-
-    const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ ignoreEnvFile: true, load: [ucp] })],
-      controllers: [CheckoutController, OrderController, DemoController],
-      providers: [
-        UcpService,
-        { provide: getModelToken(Checkout.name), useValue: new FakeCheckoutModel() },
-        { provide: TemporalService, useValue: temporal },
-      ],
-    }).compile();
-
-    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-    app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-    await app.init();
-    await app.getHttpAdapter().getInstance().ready();
+    testApp = await createTestApp();
+    ({ app, temporal } = testApp);
   });
 
-  afterEach(async () => {
-    await app.close();
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => closeTestApp(testApp));
 
   // Places an Order through the UCP checkout and returns the checkout's order reference
   async function placeOrder() {
     const created = await app.inject({
       method: 'POST',
-      url: '/v1/ucp/checkout-sessions',
+      url: '/v1/checkout-sessions',
       payload: {
         buyer: { email: 'jane@example.com', first_name: 'Jane', last_name: 'Doe' },
         line_items: [
@@ -81,7 +55,7 @@ describe('OrderController and DemoController', () => {
 
     const completed = await app.inject({
       method: 'POST',
-      url: `/v1/ucp/checkout-sessions/${checkoutId}/complete`,
+      url: `/v1/checkout-sessions/${checkoutId}/complete`,
       payload: completeCheckoutExample,
     });
     expect(completed.json().status).toBe('completed');
@@ -90,14 +64,14 @@ describe('OrderController and DemoController', () => {
   }
 
   function getOrder(id: string) {
-    return app.inject({ method: 'GET', url: `/v1/ucp/orders/${id}` });
+    return app.inject({ method: 'GET', url: `/v1/orders/${id}` });
   }
 
   function fulfilOrder(id: string) {
     return app.inject({ method: 'POST', url: `/v1/demo/orders/${id}/fulfil` });
   }
 
-  describe('GET /v1/ucp/orders/:id', () => {
+  describe('GET /v1/orders/:id', () => {
     it('returns the Order placed by checkout as a valid UCP Order', async () => {
       const { checkoutId, id, permalink_url } = await placeOrder();
 
@@ -234,7 +208,7 @@ describe('OrderController and DemoController', () => {
       const { id, permalink_url } = await placeOrder();
 
       expect(permalink_url).toBe(`http://localhost:9999/orders/${id}`);
-      expect(new URL(permalink_url).pathname).not.toBe(`/v1/ucp/orders/${id}`);
+      expect(new URL(permalink_url).pathname).not.toBe(`/v1/orders/${id}`);
       expect(expectOrder((await getOrder(id)).json()).permalink_url).toBe(permalink_url);
     });
 

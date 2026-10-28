@@ -1,5 +1,5 @@
+import { Checkout } from '../src/checkout/checkout.schema';
 import { Order, OrderInput } from '../src/temporal/order-workflow';
-import { Checkout } from '../src/ucp/checkout.schema';
 
 // In-memory stand-in for the Mongoose model, covering the queries the service uses
 export class FakeCheckoutModel {

@@ -43,14 +43,6 @@ const apiSchemas = {
       },
     },
   },
-  // Static body returned by endpoints that are not yet implemented
-  Placeholder: {
-    type: 'object',
-    required: ['hello'],
-    properties: {
-      hello: { type: 'string', enum: ['world'] },
-    },
-  },
 } satisfies Record<string, SchemaObject>;
 
 export type SchemaName = keyof typeof ucpSchemas | keyof typeof apiSchemas;
@@ -91,7 +83,6 @@ export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
     .addTag('Order permalink', 'Buyer-facing Order pages linked from `permalink_url`')
     .addTag('Demo', 'Demo-only controls that are not part of UCP')
     .addTag('Health', 'Service health')
-    .addTag('Placeholders', 'Demo-specific endpoints that are not yet implemented')
     .build();
 
   // Every endpoint declares its tags explicitly, so controller names are not

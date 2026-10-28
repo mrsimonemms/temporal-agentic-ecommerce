@@ -1,7 +1,6 @@
 import { type Order as UcpOrder } from '@ucp-js/sdk';
 
-import { Order, OrderInput } from '../temporal/order-workflow';
-import { Checkout } from './checkout.schema';
+import { Order } from '../temporal/order-workflow';
 
 const CHECKOUT_ID_PREFIX = 'chk_';
 const ORDER_ID_PREFIX = 'ord_';
@@ -19,34 +18,6 @@ export function checkoutIdForOrder(orderId: string): string | undefined {
     return undefined;
   }
   return `${CHECKOUT_ID_PREFIX}${orderId.slice(ORDER_ID_PREFIX.length)}`;
-}
-
-// Maps a checkout into the protocol-agnostic Order Workflow input
-export function toOrderInput(checkout: Checkout): OrderInput {
-  const email = checkout.buyer?.email;
-  if (!email) {
-    throw new Error(`Checkout "${checkout._id}" has no buyer email`);
-  }
-
-  const name = [checkout.buyer?.firstName, checkout.buyer?.lastName]
-    .filter((part) => !!part)
-    .join(' ');
-
-  return {
-    id: orderIdForCheckout(checkout._id),
-    buyer: {
-      name: name || undefined,
-      email,
-    },
-    currency: checkout.currency,
-    lines: checkout.lineItems.map((lineItem) => ({
-      id: lineItem.id,
-      productId: lineItem.productId,
-      title: lineItem.title,
-      quantity: lineItem.quantity,
-      unitPrice: lineItem.unitPrice,
-    })),
-  };
 }
 
 // Maps the internal Order state into a UCP Order. Fulfilment progress is

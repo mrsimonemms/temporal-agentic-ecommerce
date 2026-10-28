@@ -2,8 +2,11 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule, MongooseModuleOptions } from '@nestjs/mongoose';
 
+import { CheckoutModule } from './checkout/checkout.module';
 import config from './config';
+import { DemoModule } from './demo/demo.module';
 import { HealthModule } from './health/health.module';
+import { OrderModule } from './order/order.module';
 import { TemporalModule } from './temporal/temporal.module';
 import { UcpModule } from './ucp/ucp.module';
 
@@ -22,6 +25,9 @@ import { UcpModule } from './ucp/ucp.module';
     HealthModule,
     TemporalModule,
     UcpModule,
+    CheckoutModule,
+    OrderModule,
+    DemoModule,
   ],
 })
 export class AppModule {}

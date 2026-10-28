@@ -1,20 +1,12 @@
 import { Module } from '@nestjs/common';
-import { MongooseModule } from '@nestjs/mongoose';
 
-import { TemporalModule } from '../temporal/temporal.module';
-import { CheckoutController } from './checkout.controller';
-import { Checkout, CheckoutSchema } from './checkout.schema';
-import { DemoController } from './demo.controller';
-import { OrderController } from './order.controller';
-import { UcpController } from './ucp.controller';
+import { DiscoveryController } from './discovery.controller';
 import { UcpService } from './ucp.service';
 
+// UCP discovery and protocol-level helpers shared by the UCP capabilities
 @Module({
-  imports: [
-    MongooseModule.forFeature([{ name: Checkout.name, schema: CheckoutSchema }]),
-    TemporalModule,
-  ],
-  controllers: [UcpController, CheckoutController, OrderController, DemoController],
+  controllers: [DiscoveryController],
   providers: [UcpService],
+  exports: [UcpService],
 })
 export class UcpModule {}

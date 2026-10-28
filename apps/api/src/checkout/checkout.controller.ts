@@ -17,9 +17,9 @@ import {
 } from '@ucp-js/sdk';
 
 import { schemaRef } from '../swagger';
+import { UcpSchemaPipe } from '../ucp/ucp-schema.pipe';
 import { completeCheckoutExample, createCheckoutExample } from './checkout.examples';
-import { UcpSchemaPipe } from './ucp-schema.pipe';
-import { UcpService } from './ucp.service';
+import { CheckoutService } from './checkout.service';
 
 const checkoutIdParam = ApiParam({
   name: 'id',
@@ -48,9 +48,9 @@ const checkoutOrErrorResponse = (description: string) =>
 @ApiInternalServerErrorResponse({
   description: 'Unexpected failure, such as MongoDB being unavailable',
 })
-@Controller('ucp/checkout-sessions')
+@Controller('checkout-sessions')
 export class CheckoutController {
-  constructor(private readonly service: UcpService) {}
+  constructor(private readonly service: CheckoutService) {}
 
   @Post()
   @ApiOperation({

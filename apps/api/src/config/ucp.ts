@@ -37,9 +37,8 @@ export default registerAs('ucp', (): UcpProfileDocument => {
             version: ucpVersion,
             spec: `https://ucp.dev/${ucpVersion}/specification/shopping/order`,
             schema: `https://ucp.dev/${ucpVersion}/schemas/shopping/order.json`,
-            config: {
-              webhook_url: `${schemaUrl.origin}/v1/webhooks/ucp/orders`,
-            },
+            // No webhook_url: in UCP the platform declares where it receives
+            // order events and the business sends them
           },
         ],
       },
@@ -50,7 +49,7 @@ export default registerAs('ucp', (): UcpProfileDocument => {
             transport: 'rest',
             spec: `https://ucp.dev/${ucpVersion}/specification/overview`,
             schema: `https://ucp.dev/${ucpVersion}/services/shopping/rest.openapi.json`,
-            endpoint: `${schemaUrl.origin}/v1/ucp`, // Our primary UCP endpoint
+            endpoint: `${schemaUrl.origin}/v1`, // Our primary UCP endpoint
           },
         ],
       },

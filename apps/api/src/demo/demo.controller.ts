@@ -1,15 +1,19 @@
 import { Controller, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 
-import { orderIdParam, orderOrErrorResponse, orderUnavailableResponse } from './order.controller';
-import { UcpService } from './ucp.service';
+import {
+  orderIdParam,
+  orderOrErrorResponse,
+  orderUnavailableResponse,
+} from '../order/order.controller';
+import { OrderService } from '../order/order.service';
 
 // Demo-only controls for driving an Order through its lifecycle. These are not
 // part of UCP and stand in for events from real fulfilment systems.
 @ApiTags('Demo')
 @Controller('demo')
 export class DemoController {
-  constructor(private readonly service: UcpService) {}
+  constructor(private readonly orders: OrderService) {}
 
   @Post('orders/:id/fulfil')
   @HttpCode(HttpStatus.OK)
@@ -27,6 +31,6 @@ export class DemoController {
   )
   @orderUnavailableResponse
   fulfilOrder(@Param('id') id: string) {
-    return this.service.markOrderFulfilled(id);
+    return this.orders.markOrderFulfilled(id);
   }
 }

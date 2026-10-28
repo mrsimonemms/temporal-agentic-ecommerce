@@ -1,17 +1,8 @@
-import { VersioningType } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { getModelToken } from '@nestjs/mongoose';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
-import { Test } from '@nestjs/testing';
+import { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { CheckoutResponseSchema, ErrorResponseSchema } from '@ucp-js/sdk';
 
+import { TestApp, closeTestApp, createTestApp } from '../../test/app';
 import { FakeCheckoutModel, FakeTemporalService } from '../../test/fakes';
-import ucp from '../config/ucp';
-import { TemporalService } from '../temporal/temporal.service';
-import { CheckoutController } from './checkout.controller';
-import { Checkout } from './checkout.schema';
-import { UcpController } from './ucp.controller';
-import { UcpService } from './ucp.service';
 
 const buyer = { email: 'jane@example.com', first_name: 'Jane', last_name: 'Doe' };
 
@@ -46,40 +37,23 @@ describe('CheckoutController', () => {
   let model: FakeCheckoutModel;
   let temporal: FakeTemporalService;
 
+  let testApp: TestApp;
+
   beforeEach(async () => {
-    vi.stubEnv('SCHEMA_URL', 'http://localhost:9999');
-    model = new FakeCheckoutModel();
-    temporal = new FakeTemporalService();
-
-    const moduleRef = await Test.createTestingModule({
-      imports: [ConfigModule.forRoot({ ignoreEnvFile: true, load: [ucp] })],
-      controllers: [UcpController, CheckoutController],
-      providers: [
-        UcpService,
-        { provide: getModelToken(Checkout.name), useValue: model },
-        { provide: TemporalService, useValue: temporal },
-      ],
-    }).compile();
-
-    app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-    app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-    await app.init();
-    await app.getHttpAdapter().getInstance().ready();
+    testApp = await createTestApp();
+    ({ app, model, temporal } = testApp);
   });
 
-  afterEach(async () => {
-    await app.close();
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => closeTestApp(testApp));
 
   function createCheckout(payload: object) {
-    return app.inject({ method: 'POST', url: '/v1/ucp/checkout-sessions', payload });
+    return app.inject({ method: 'POST', url: '/v1/checkout-sessions', payload });
   }
 
   function completeCheckout(id: string, payload: object) {
     return app.inject({
       method: 'POST',
-      url: `/v1/ucp/checkout-sessions/${id}/complete`,
+      url: `/v1/checkout-sessions/${id}/complete`,
       payload,
     });
   }
@@ -219,7 +193,7 @@ describe('CheckoutController', () => {
 
       const res = await app.inject({
         method: 'GET',
-        url: `/v1/ucp/checkout-sessions/${created.id}`,
+        url: `/v1/checkout-sessions/${created.id}`,
       });
 
       expect(res.statusCode).toBe(200);
@@ -227,7 +201,7 @@ describe('CheckoutController', () => {
     });
 
     it('returns an error response for an unknown checkout', async () => {
-      const res = await app.inject({ method: 'GET', url: '/v1/ucp/checkout-sessions/chk_missing' });
+      const res = await app.inject({ method: 'GET', url: '/v1/checkout-sessions/chk_missing' });
 
       expect(res.statusCode).toBe(200);
       expect(expectError(res.json()).messages).toEqual([

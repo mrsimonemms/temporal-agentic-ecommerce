@@ -19,8 +19,8 @@ import {
 } from '@nestjs/swagger';
 
 import { schemaRef } from '../swagger';
-import { renderOrderNotFoundPage, renderOrderPage } from './order-page';
-import { UcpService } from './ucp.service';
+import { renderOrderNotFoundPage, renderOrderPage } from './order.page';
+import { OrderService } from './order.service';
 
 export const orderIdParam = ApiParam({
   name: 'id',
@@ -41,12 +41,12 @@ export const orderUnavailableResponse = ApiInternalServerErrorResponse({
 
 @Controller()
 export class OrderController {
-  constructor(private readonly service: UcpService) {}
+  constructor(private readonly service: OrderService) {}
 
   // UCP order capability REST binding, relative to the advertised
   // dev.ucp.shopping service endpoint
   // @link https://ucp.dev/2026-08-25/specification/shopping/order/rest/
-  @Get('ucp/orders/:id')
+  @Get('orders/:id')
   @ApiTags('UCP order')
   @ApiOperation({
     summary: 'Get an order',
