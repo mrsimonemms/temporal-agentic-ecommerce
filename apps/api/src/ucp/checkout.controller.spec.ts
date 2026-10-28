@@ -6,6 +6,8 @@ import { Test } from '@nestjs/testing';
 import { CheckoutResponseSchema, ErrorResponseSchema } from '@ucp-js/sdk';
 
 import ucp from '../config/ucp';
+import { OrderInput } from '../temporal/order-workflow';
+import { TemporalService } from '../temporal/temporal.service';
 import { CheckoutController } from './checkout.controller';
 import { Checkout } from './checkout.schema';
 import { UcpController } from './ucp.controller';
@@ -14,6 +16,9 @@ import { UcpService } from './ucp.service';
 // In-memory stand-in for the Mongoose model, covering the queries the service uses
 class FakeCheckoutModel {
   readonly docs = new Map<string, Checkout>();
+
+  // When set, the next update to this status fails as if MongoDB were unavailable
+  failNextUpdateTo?: string;
 
   async create(doc: Checkout) {
     this.docs.set(doc._id, structuredClone(doc));
@@ -25,6 +30,15 @@ class FakeCheckoutModel {
   }
 
   findOneAndUpdate(filter: { _id: string; status: string }, update: { $set: Partial<Checkout> }) {
+    if (this.failNextUpdateTo && update.$set.status === this.failNextUpdateTo) {
+      this.failNextUpdateTo = undefined;
+      return {
+        lean: () => ({
+          exec: () => Promise.reject(new Error('MongoDB unavailable')),
+        }),
+      };
+    }
+
     const doc = this.docs.get(filter._id);
     if (!doc || doc.status !== filter.status) {
       return this.query(null);
@@ -38,6 +52,18 @@ class FakeCheckoutModel {
   private query(value: Checkout | null) {
     return { lean: () => ({ exec: async () => structuredClone(value) }) };
   }
+}
+
+// Stand-in for Temporal that, like the real Workflow ID policies, never creates
+// a second Workflow for the same Workflow ID
+class FakeTemporalService {
+  readonly workflows = new Map<string, OrderInput>();
+
+  readonly startOrderWorkflow = vi.fn(async (input: OrderInput) => {
+    if (!this.workflows.has(input.id)) {
+      this.workflows.set(input.id, structuredClone(input));
+    }
+  });
 }
 
 const buyer = { email: 'jane@example.com', first_name: 'Jane', last_name: 'Doe' };
@@ -71,15 +97,21 @@ function expectError(body: unknown) {
 describe('CheckoutController', () => {
   let app: NestFastifyApplication;
   let model: FakeCheckoutModel;
+  let temporal: FakeTemporalService;
 
   beforeEach(async () => {
     vi.stubEnv('SCHEMA_URL', 'http://localhost:9999');
     model = new FakeCheckoutModel();
+    temporal = new FakeTemporalService();
 
     const moduleRef = await Test.createTestingModule({
       imports: [ConfigModule.forRoot({ ignoreEnvFile: true, load: [ucp] })],
       controllers: [UcpController, CheckoutController],
-      providers: [UcpService, { provide: getModelToken(Checkout.name), useValue: model }],
+      providers: [
+        UcpService,
+        { provide: getModelToken(Checkout.name), useValue: model },
+        { provide: TemporalService, useValue: temporal },
+      ],
     }).compile();
 
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -271,16 +303,24 @@ describe('CheckoutController', () => {
       return res.json().id;
     }
 
-    it('accepts completion of a ready checkout', async () => {
+    function orderIdFor(checkoutId: string) {
+      return `ord_${checkoutId.replace(/^chk_/, '')}`;
+    }
+
+    it('completes a ready checkout by starting the Order Workflow', async () => {
       const id = await readyCheckout();
+      const orderId = orderIdFor(id);
 
       const res = await completeCheckout(id, { payment });
 
       expect(res.statusCode).toBe(200);
       const checkout = expectCheckout(res.json());
-      expect(checkout.status).toBe('complete_in_progress');
-      // The order is only present once the checkout is completed
-      expect(checkout.order).toBeUndefined();
+      expect(checkout.status).toBe('completed');
+      expect(checkout.messages).toBeUndefined();
+      expect(checkout.order).toEqual({
+        id: orderId,
+        permalink_url: `http://localhost:9999/orders/${orderId}`,
+      });
       expect(checkout.payment).toEqual({
         instruments: [
           {
@@ -293,8 +333,15 @@ describe('CheckoutController', () => {
         ],
       });
 
+      expect(temporal.startOrderWorkflow).toHaveBeenCalledOnce();
+      expect([...temporal.workflows.keys()]).toEqual([orderId]);
+
       const stored = model.docs.get(id)!;
-      expect(stored.status).toBe('complete_in_progress');
+      expect(stored.status).toBe('completed');
+      expect(stored.order).toEqual({
+        id: orderId,
+        permalinkUrl: `http://localhost:9999/orders/${orderId}`,
+      });
       expect(stored.payment).toEqual({
         instrumentId: 'pi_gpay_5678',
         handlerId: 'gpay',
@@ -302,6 +349,113 @@ describe('CheckoutController', () => {
         display: { brand: 'mastercard', last_digits: '5678' },
       });
       expect(JSON.stringify(stored)).not.toContain('examplePaymentMethodToken');
+    });
+
+    it('maps the checkout into the Order Workflow input', async () => {
+      const created = (
+        await createCheckout({
+          buyer,
+          line_items: [
+            { item: { id: 'sku_kettle' }, quantity: 2 },
+            { item: { id: 'sku_mug_set' }, quantity: 1 },
+          ],
+        })
+      ).json();
+
+      await completeCheckout(created.id, { payment });
+
+      expect(temporal.startOrderWorkflow).toHaveBeenCalledExactlyOnceWith({
+        id: orderIdFor(created.id),
+        buyer: { name: 'Jane Doe', email: 'jane@example.com' },
+        currency: 'GBP',
+        lines: [
+          {
+            id: 'li_1',
+            productId: 'sku_kettle',
+            title: 'Stainless Steel Kettle',
+            quantity: 2,
+            unitPrice: 3499,
+          },
+          {
+            id: 'li_2',
+            productId: 'sku_mug_set',
+            title: 'Stoneware Mug Set (4 pack)',
+            quantity: 1,
+            unitPrice: 2400,
+          },
+        ],
+      });
+    });
+
+    it('does not start another Workflow when a completed checkout is completed again', async () => {
+      const id = await readyCheckout();
+      const first = expectCheckout((await completeCheckout(id, { payment })).json());
+
+      const res = await completeCheckout(id, { payment });
+
+      expect(res.statusCode).toBe(200);
+      const checkout = expectCheckout(res.json());
+      expect(checkout.status).toBe('completed');
+      expect(checkout.order).toEqual(first.order);
+      expect(checkout.messages).toEqual([
+        {
+          type: 'error',
+          code: 'operation_not_allowed',
+          content: 'Checkout cannot be completed while its status is "completed"',
+          severity: 'unrecoverable',
+        },
+      ]);
+      expect(temporal.startOrderWorkflow).toHaveBeenCalledOnce();
+      expect(temporal.workflows.size).toBe(1);
+    });
+
+    it('recovers when the Workflow starts but completion is not recorded', async () => {
+      const id = await readyCheckout();
+      const orderId = orderIdFor(id);
+      model.failNextUpdateTo = 'completed';
+
+      const failed = expectCheckout((await completeCheckout(id, { payment })).json());
+
+      expect(failed.status).toBe('complete_in_progress');
+      expect(failed.order).toBeUndefined();
+      expect(model.docs.get(id)?.status).toBe('complete_in_progress');
+      expect([...temporal.workflows.keys()]).toEqual([orderId]);
+
+      const res = await completeCheckout(id, { payment });
+
+      expect(res.statusCode).toBe(200);
+      const checkout = expectCheckout(res.json());
+      expect(checkout.status).toBe('completed');
+      expect(checkout.order?.id).toBe(orderId);
+      expect(model.docs.get(id)?.status).toBe('completed');
+      // The retry targets the same Workflow ID rather than creating another Order
+      expect(temporal.startOrderWorkflow).toHaveBeenCalledTimes(2);
+      expect(temporal.startOrderWorkflow.mock.calls.map(([input]) => input.id)).toEqual([
+        orderId,
+        orderId,
+      ]);
+      expect([...temporal.workflows.keys()]).toEqual([orderId]);
+    });
+
+    it('leaves the checkout recoverable when Temporal is unavailable', async () => {
+      const id = await readyCheckout();
+      temporal.startOrderWorkflow.mockRejectedValueOnce(new Error('Temporal unavailable'));
+
+      const res = await completeCheckout(id, { payment });
+
+      expect(res.statusCode).toBe(200);
+      const failed = expectCheckout(res.json());
+      expect(failed.status).toBe('complete_in_progress');
+      expect(failed.order).toBeUndefined();
+      expect(model.docs.get(id)?.status).toBe('complete_in_progress');
+      expect(model.docs.get(id)?.order).toBeUndefined();
+      expect(temporal.workflows.size).toBe(0);
+
+      const retried = expectCheckout((await completeCheckout(id, { payment })).json());
+
+      expect(retried.status).toBe('completed');
+      expect(retried.order?.id).toBe(orderIdFor(id));
+      expect(temporal.workflows.size).toBe(1);
     });
 
     it('does not complete an incomplete checkout', async () => {
@@ -316,25 +470,7 @@ describe('CheckoutController', () => {
       expect(checkout.status).toBe('incomplete');
       expect(checkout.messages?.[0]).toMatchObject({ code: 'missing', path: '$.buyer.email' });
       expect(model.docs.get(created.id)?.status).toBe('incomplete');
-    });
-
-    it('rejects a new completion while completion is in progress', async () => {
-      const id = await readyCheckout();
-      await completeCheckout(id, { payment });
-
-      const res = await completeCheckout(id, { payment });
-
-      expect(res.statusCode).toBe(200);
-      const checkout = expectCheckout(res.json());
-      expect(checkout.status).toBe('complete_in_progress');
-      expect(checkout.messages).toEqual([
-        {
-          type: 'error',
-          code: 'operation_not_allowed',
-          content: 'Checkout cannot be completed while its status is "complete_in_progress"',
-          severity: 'recoverable',
-        },
-      ]);
+      expect(temporal.startOrderWorkflow).not.toHaveBeenCalled();
     });
 
     it('rejects completion with an unsupported payment handler', async () => {
@@ -357,6 +493,7 @@ describe('CheckoutController', () => {
         },
       ]);
       expect(model.docs.get(id)?.status).toBe('ready_for_complete');
+      expect(temporal.startOrderWorkflow).not.toHaveBeenCalled();
     });
 
     it('rejects completion without a selected payment instrument', async () => {

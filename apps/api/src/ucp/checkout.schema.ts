@@ -54,6 +54,16 @@ export class CheckoutPayment {
   display?: Record<string, unknown>;
 }
 
+// Reference to the Order placed by a completed checkout
+@Schema({ _id: false })
+export class CheckoutOrder {
+  @Prop({ type: String, required: true })
+  id: string;
+
+  @Prop({ type: String, required: true })
+  permalinkUrl: string;
+}
+
 @Schema({ collection: 'checkouts', timestamps: true })
 export class Checkout {
   @Prop({ type: String, required: true })
@@ -73,6 +83,9 @@ export class Checkout {
 
   @Prop({ type: SchemaFactory.createForClass(CheckoutPayment) })
   payment?: CheckoutPayment;
+
+  @Prop({ type: SchemaFactory.createForClass(CheckoutOrder) })
+  order?: CheckoutOrder;
 }
 
 export const CheckoutSchema = SchemaFactory.createForClass(Checkout);

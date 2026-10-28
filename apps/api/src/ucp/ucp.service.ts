@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import {
@@ -14,14 +14,19 @@ import {
 import { Model } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 
+import { TemporalService } from '../temporal/temporal.service';
 import { CATALOGUE_CURRENCY, findProduct } from './catalogue';
-import { Checkout, CheckoutLineItem, CheckoutPayment } from './checkout.schema';
+import { Checkout, CheckoutLineItem, CheckoutOrder, CheckoutPayment } from './checkout.schema';
+import { toOrderInput } from './order.mapper';
 
 @Injectable()
 export class UcpService {
+  protected readonly logger = new Logger(this.constructor.name);
+
   constructor(
     private readonly config: ConfigService,
     @InjectModel(Checkout.name) private readonly checkouts: Model<Checkout>,
+    private readonly temporal: TemporalService,
   ) {}
 
   getMerchantProfile(): UcpDiscoveryProfile {
@@ -115,6 +120,13 @@ export class UcpService {
       return this.checkoutResponse(checkout);
     }
 
+    if (checkout.status === 'complete_in_progress') {
+      // Completion was previously accepted but the Order was not recorded.
+      // The stored payment selection is used and the request is not
+      // re-evaluated.
+      return this.placeOrder(checkout);
+    }
+
     if (checkout.status !== 'ready_for_complete') {
       return this.checkoutResponse(checkout, [this.notCompletable(checkout)]);
     }
@@ -162,8 +174,7 @@ export class UcpService {
     };
 
     // Conditional update guards against concurrent completion requests.
-    // Completion is accepted for asynchronous processing: the checkout
-    // becomes completed once an Order has been placed for it.
+    // The checkout becomes completed once an Order has been placed for it.
     const accepted = await this.checkouts
       .findOneAndUpdate(
         { _id: id, status: 'ready_for_complete' },
@@ -177,7 +188,55 @@ export class UcpService {
       return this.getCheckout(id);
     }
 
-    return this.checkoutResponse(accepted);
+    return this.placeOrder(accepted);
+  }
+
+  // Starts the Order Workflow and then records the Order against the
+  // checkout. Both steps are idempotent, so if either fails the checkout
+  // remains complete_in_progress and a repeated completion request resumes
+  // from here without creating another Order.
+  private async placeOrder(checkout: Checkout): Promise<CheckoutResponse | ErrorResponse> {
+    const input = toOrderInput(checkout);
+
+    try {
+      await this.temporal.startOrderWorkflow(input);
+    } catch (err) {
+      this.logger.error(`Unable to start Order Workflow for checkout "${checkout._id}"`, err);
+      return this.checkoutResponse(checkout);
+    }
+
+    const order: CheckoutOrder = {
+      id: input.id,
+      permalinkUrl: this.orderPermalinkUrl(input.id),
+    };
+
+    let completed: Checkout | null;
+    try {
+      completed = await this.checkouts
+        .findOneAndUpdate(
+          { _id: checkout._id, status: 'complete_in_progress' },
+          { $set: { status: 'completed', order } },
+          { new: true },
+        )
+        .lean<Checkout>()
+        .exec();
+    } catch (err) {
+      this.logger.error(`Unable to record Order "${order.id}" for checkout "${checkout._id}"`, err);
+      return this.checkoutResponse(checkout);
+    }
+
+    if (!completed) {
+      // A concurrent request has already recorded the outcome
+      return this.getCheckout(checkout._id);
+    }
+
+    return this.checkoutResponse(completed);
+  }
+
+  // Demo-specific buyer-facing URL for the Order, served from the same origin
+  // as the API
+  private orderPermalinkUrl(orderId: string): string {
+    return new URL(`/orders/${orderId}`, this.config.getOrThrow<string>('SCHEMA_URL')).toString();
   }
 
   private checkoutResponse(checkout: Checkout, messages: MessageError[] = []): CheckoutResponse {
@@ -237,6 +296,10 @@ export class UcpService {
       ],
       links: [],
       messages: messages.length > 0 ? messages : undefined,
+      order: checkout.order && {
+        id: checkout.order.id,
+        permalink_url: checkout.order.permalinkUrl,
+      },
       payment: checkout.payment && {
         instruments: [
           {
