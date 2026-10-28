@@ -1,7 +1,12 @@
 import { Test } from '@nestjs/testing';
-import { WorkflowExecutionAlreadyStartedError, WorkflowNotFoundError } from '@temporalio/client';
+import {
+  ApplicationFailure,
+  WorkflowExecutionAlreadyStartedError,
+  WorkflowNotFoundError,
+  WorkflowUpdateFailedError,
+} from '@temporalio/client';
 
-import { OrderInput } from './order-workflow';
+import { OrderInput, OrderUpdateRejectedError } from './order-workflow';
 import { CONNECTION, WORKFLOW_CLIENT } from './temporal.providers';
 import { TemporalService } from './temporal.service';
 
@@ -17,6 +22,7 @@ describe('TemporalService', () => {
   let start: ReturnType<typeof vi.fn>;
   let query: ReturnType<typeof vi.fn>;
   let signal: ReturnType<typeof vi.fn>;
+  let executeUpdate: ReturnType<typeof vi.fn>;
   let getHandle: ReturnType<typeof vi.fn>;
   let withDeadline: ReturnType<typeof vi.fn>;
 
@@ -24,7 +30,8 @@ describe('TemporalService', () => {
     start = vi.fn().mockResolvedValue({});
     query = vi.fn();
     signal = vi.fn().mockResolvedValue(undefined);
-    getHandle = vi.fn(() => ({ query, signal }));
+    executeUpdate = vi.fn();
+    getHandle = vi.fn(() => ({ query, signal, executeUpdate }));
     withDeadline = vi.fn((_deadline: number, fn: () => Promise<unknown>) => fn());
 
     const moduleRef = await Test.createTestingModule({
@@ -120,6 +127,81 @@ describe('TemporalService', () => {
       signal.mockRejectedValueOnce(new Error('Temporal unavailable'));
 
       await expect(service.markOrderFulfilled('ord_123')).rejects.toThrow('Temporal unavailable');
+    });
+  });
+
+  describe('reportFulfilmentException', () => {
+    const exception = { lineId: 'li_2', reason: 'Unavailable' };
+
+    it('sends the reportFulfilmentException Signal with the Go payload', async () => {
+      await expect(service.reportFulfilmentException('ord_123', exception)).resolves.toBe(true);
+      expect(getHandle).toHaveBeenCalledExactlyOnceWith('ord_123');
+      expect(signal).toHaveBeenCalledExactlyOnceWith('reportFulfilmentException', exception);
+      expect(withDeadline).toHaveBeenCalledOnce();
+    });
+
+    it('returns false when no running Workflow exists', async () => {
+      signal.mockRejectedValueOnce(new WorkflowNotFoundError('not found', 'ord_123', undefined));
+
+      await expect(service.reportFulfilmentException('ord_123', exception)).resolves.toBe(false);
+    });
+
+    it('propagates other failures', async () => {
+      signal.mockRejectedValueOnce(new Error('Temporal unavailable'));
+
+      await expect(service.reportFulfilmentException('ord_123', exception)).rejects.toThrow(
+        'Temporal unavailable',
+      );
+    });
+  });
+
+  describe('resolveFulfilmentException', () => {
+    const req = { lineId: 'li_2', alternativeSource: 'warehouse-north', approvedBy: 'ops' };
+
+    it('executes the resolveFulfilmentException Update with the Go payload', async () => {
+      const order = { id: 'ord_123', status: 'confirmed' };
+      executeUpdate.mockResolvedValueOnce(order);
+
+      await expect(service.resolveFulfilmentException('ord_123', req)).resolves.toEqual(order);
+      expect(getHandle).toHaveBeenCalledExactlyOnceWith('ord_123');
+      expect(executeUpdate).toHaveBeenCalledExactlyOnceWith('resolveFulfilmentException', {
+        args: [req],
+      });
+      expect(withDeadline).toHaveBeenCalledOnce();
+    });
+
+    it('returns undefined when no running Workflow exists', async () => {
+      executeUpdate.mockRejectedValueOnce(
+        new WorkflowNotFoundError('not found', 'ord_123', undefined),
+      );
+
+      await expect(service.resolveFulfilmentException('ord_123', req)).resolves.toBeUndefined();
+    });
+
+    it('translates a rejected Update into OrderUpdateRejectedError', async () => {
+      executeUpdate.mockRejectedValueOnce(
+        new WorkflowUpdateFailedError(
+          'Workflow Update failed',
+          ApplicationFailure.nonRetryable(
+            'order is not awaiting intervention: status is confirmed',
+            'InvalidFulfilmentResolution',
+          ),
+        ),
+      );
+
+      const err = await service.resolveFulfilmentException('ord_123', req).catch((e) => e);
+
+      expect(err).toBeInstanceOf(OrderUpdateRejectedError);
+      expect(err.message).toBe('order is not awaiting intervention: status is confirmed');
+      expect(err.type).toBe('InvalidFulfilmentResolution');
+    });
+
+    it('propagates other failures', async () => {
+      executeUpdate.mockRejectedValueOnce(new Error('Temporal unavailable'));
+
+      await expect(service.resolveFulfilmentException('ord_123', req)).rejects.toThrow(
+        'Temporal unavailable',
+      );
     });
   });
 });

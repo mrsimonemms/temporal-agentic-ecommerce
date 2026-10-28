@@ -1,10 +1,12 @@
 import { Inject, Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { HealthIndicatorResult, HealthIndicatorStatus } from '@nestjs/terminus';
 import {
+  ApplicationFailure,
   Client,
   Connection,
   WorkflowExecutionAlreadyStartedError,
   WorkflowNotFoundError,
+  WorkflowUpdateFailedError,
 } from '@temporalio/client';
 import { grpc as grpcProto } from '@temporalio/proto';
 import { setTimeout } from 'timers/promises';
@@ -12,10 +14,15 @@ import { setTimeout } from 'timers/promises';
 import {
   ORDER_QUERY_GET_ORDER,
   ORDER_SIGNAL_MARK_FULFILLED,
+  ORDER_SIGNAL_REPORT_FULFILMENT_EXCEPTION,
   ORDER_TASK_QUEUE,
+  ORDER_UPDATE_RESOLVE_FULFILMENT_EXCEPTION,
   ORDER_WORKFLOW_TYPE,
   Order,
   OrderInput,
+  OrderUpdateRejectedError,
+  ReportFulfilmentExceptionSignal,
+  ResolveFulfilmentExceptionRequest,
 } from './order-workflow';
 import { CONNECTION, WORKFLOW_CLIENT } from './temporal.providers';
 
@@ -83,6 +90,55 @@ export class TemporalService implements OnApplicationShutdown {
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) {
         return false;
+      }
+      throw err;
+    }
+  }
+
+  // Signals the Order Workflow to report a fulfilment exception. Returns false
+  // if no running Order Workflow exists with that ID. Delivery does not mean
+  // the Workflow accepted the exception: invalid exceptions are ignored.
+  async reportFulfilmentException(
+    orderId: string,
+    signal: ReportFulfilmentExceptionSignal,
+  ): Promise<boolean> {
+    try {
+      await this.withDeadline(() =>
+        this.client.workflow
+          .getHandle(orderId)
+          .signal(ORDER_SIGNAL_REPORT_FULFILMENT_EXCEPTION, signal),
+      );
+      return true;
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  // Executes the Update resolving the current fulfilment exception and returns
+  // the resulting Order, or undefined if no running Order Workflow exists.
+  // Throws OrderUpdateRejectedError when the Workflow rejects the resolution.
+  async resolveFulfilmentException(
+    orderId: string,
+    req: ResolveFulfilmentExceptionRequest,
+  ): Promise<Order | undefined> {
+    try {
+      return await this.withDeadline(() =>
+        this.client.workflow
+          .getHandle(orderId)
+          .executeUpdate<Order, [ResolveFulfilmentExceptionRequest]>(
+            ORDER_UPDATE_RESOLVE_FULFILMENT_EXCEPTION,
+            { args: [req] },
+          ),
+      );
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        return undefined;
+      }
+      if (err instanceof WorkflowUpdateFailedError && err.cause instanceof ApplicationFailure) {
+        throw new OrderUpdateRejectedError(err.cause.message, err.cause.type ?? undefined);
       }
       throw err;
     }

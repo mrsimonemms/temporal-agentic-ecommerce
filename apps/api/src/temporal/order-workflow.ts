@@ -13,6 +13,12 @@ export const ORDER_QUERY_GET_ORDER = 'getOrder';
 // Matches workflows.SignalMarkFulfilled
 export const ORDER_SIGNAL_MARK_FULFILLED = 'markFulfilled';
 
+// Matches workflows.SignalReportFulfilmentException
+export const ORDER_SIGNAL_REPORT_FULFILMENT_EXCEPTION = 'reportFulfilmentException';
+
+// Matches workflows.UpdateResolveFulfilmentException
+export const ORDER_UPDATE_RESOLVE_FULFILMENT_EXCEPTION = 'resolveFulfilmentException';
+
 export interface OrderBuyer {
   id?: string;
   name?: string;
@@ -45,7 +51,69 @@ export interface OrderInput {
 }
 
 // Matches workflows.OrderStatus
-export type OrderStatus = 'reserving_inventory' | 'confirmed' | 'fulfilled';
+export type OrderStatus =
+  'reserving_inventory' | 'confirmed' | 'awaiting_intervention' | 'fulfilled';
+
+// Matches workflows.FulfilmentDecision
+export type FulfilmentDecision = 'alternative_source';
+
+// Matches workflows.FulfilmentSource
+export interface FulfilmentSource {
+  lineId: string;
+  source: string;
+}
+
+// Matches workflows.FulfilmentException
+export interface FulfilmentException {
+  lineId: string;
+  reason: string;
+  raisedAt: string;
+}
+
+// Matches workflows.FulfilmentResolution
+export interface FulfilmentResolution {
+  lineId: string;
+  reason: string;
+  decision: FulfilmentDecision;
+  alternativeSource: string;
+  approvedBy: string;
+  note?: string;
+  raisedAt: string;
+  resolvedAt: string;
+}
+
+// Matches workflows.FulfilmentPlan: how the Order is fulfilled, separate from
+// what was purchased
+export interface FulfilmentPlan {
+  sources?: FulfilmentSource[];
+  exception?: FulfilmentException;
+  resolutions?: FulfilmentResolution[];
+}
+
+// Matches workflows.ReportFulfilmentExceptionSignal
+export interface ReportFulfilmentExceptionSignal {
+  lineId: string;
+  reason: string;
+}
+
+// Matches workflows.ResolveFulfilmentExceptionRequest
+export interface ResolveFulfilmentExceptionRequest {
+  lineId: string;
+  alternativeSource: string;
+  approvedBy: string;
+  note?: string;
+}
+
+// An Update rejected by the Order Workflow's validator, carrying its reason
+export class OrderUpdateRejectedError extends Error {
+  constructor(
+    message: string,
+    readonly type?: string,
+  ) {
+    super(message);
+    this.name = 'OrderUpdateRejectedError';
+  }
+}
 
 // Current Order state returned by the getOrder Query. Timestamps are RFC 3339
 // strings as serialised by Go.
@@ -59,4 +127,5 @@ export interface Order {
   createdAt: string;
   fulfilledAt?: string;
   inventoryReservationId?: string;
+  fulfilment: FulfilmentPlan;
 }

@@ -3,6 +3,7 @@ import {
   ApiBadRequestResponse,
   ApiBody,
   ApiConflictResponse,
+  ApiInternalServerErrorResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -18,7 +19,28 @@ import {
 } from '../order/order.controller';
 import { OrderService } from '../order/order.service';
 import { schemaRef } from '../swagger';
+import { Order as OrderState } from '../temporal/order-workflow';
+import {
+  OrderStateDto,
+  ReportFulfilmentExceptionDto,
+  ResolveFulfilmentExceptionDto,
+} from './fulfilment-exception.dto';
 import { InventoryFailuresDto, InventoryFailuresResponseDto } from './inventory-failures.dto';
+
+const orderIdPathParam = ApiParam({
+  name: 'orderId',
+  description: 'Order ID from the `order` reference of a completed checkout',
+  example: 'ord_0b6f7c1e-3f0a-4d2b-9a57-2f1c8e0d4b11',
+});
+
+const orderNotFoundResponse = ApiNotFoundResponse({
+  description: 'No running Order Workflow exists with this ID',
+  schema: schemaRef('HttpError'),
+});
+
+const orderStateUnavailableResponse = ApiInternalServerErrorResponse({
+  description: 'Unexpected failure, such as Temporal being unavailable or not responding in time',
+});
 
 // Demo-only controls for driving an Order through its lifecycle. These are not
 // part of UCP and stand in for events from real fulfilment systems.
@@ -88,5 +110,97 @@ export class DemoController {
   @orderUnavailableResponse
   fulfilOrder(@Param('id') id: string) {
     return this.orders.markOrderFulfilled(id);
+  }
+
+  @Post('orders/:orderId/fulfilment-exception')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Report a fulfilment exception (demo only)',
+    description:
+      'Demo-only endpoint, not part of UCP. Sends the `reportFulfilmentException` Signal to the ' +
+      'Order Workflow, standing in for a supplier reporting a business problem with a line. ' +
+      'The Order moves to `awaiting_intervention` and waits for a decision.\n\n' +
+      'The Workflow only accepts an exception for a line of a `confirmed` Order with no other ' +
+      'exception outstanding. Delivery is not treated as acceptance: the Order is read back and ' +
+      'HTTP 409 is returned if the exception was not recorded.\n\n' +
+      'Returns the Order Workflow state, which includes the fulfilment plan. This is not a UCP ' +
+      'Order.',
+  })
+  @orderIdPathParam
+  @ApiBody({
+    type: ReportFulfilmentExceptionDto,
+    examples: {
+      supplierUnavailable: {
+        summary: 'Item unavailable at the selected warehouse',
+        value: {
+          lineId: 'li_2',
+          reason: 'Supplier reports the item is unavailable at the selected warehouse',
+        },
+      },
+    },
+  })
+  @ApiOkResponse({ description: 'The exception was recorded', type: OrderStateDto })
+  @ApiBadRequestResponse({
+    description: '`lineId` or `reason` is missing or empty',
+    schema: schemaRef('HttpError'),
+  })
+  @orderNotFoundResponse
+  @ApiConflictResponse({
+    description: 'The Order did not accept the exception, for example because it is not confirmed',
+    schema: schemaRef('HttpError'),
+  })
+  @orderStateUnavailableResponse
+  reportFulfilmentException(
+    @Param('orderId') orderId: string,
+    @Body() body: ReportFulfilmentExceptionDto,
+  ): Promise<OrderState> {
+    return this.orders.reportFulfilmentException(orderId, body);
+  }
+
+  @Post('orders/:orderId/resolve-fulfilment-exception')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Approve an alternative fulfilment source (demo only)',
+    description:
+      'Demo-only endpoint, not part of UCP. Executes the `resolveFulfilmentException` Update, ' +
+      'standing in for an operator decision. Approving an alternative source for the affected ' +
+      'line records the decision in the fulfilment plan and returns the Order to `confirmed`. ' +
+      'What was purchased is unchanged.\n\n' +
+      'The Workflow validates the resolution and rejects it unless the Order is awaiting ' +
+      'intervention and `lineId` is the affected line. Rejections are returned as HTTP 409 ' +
+      'with the reason given by the Workflow and do not change the Order.\n\n' +
+      'Returns the Order Workflow state. This is not a UCP Order.',
+  })
+  @orderIdPathParam
+  @ApiBody({
+    type: ResolveFulfilmentExceptionDto,
+    examples: {
+      alternativeSource: {
+        summary: 'Fulfil from another warehouse',
+        value: {
+          lineId: 'li_2',
+          alternativeSource: 'warehouse-north',
+          approvedBy: 'ops@example.com',
+          note: 'Same item, ships a day later',
+        },
+      },
+    },
+  })
+  @ApiOkResponse({ description: 'The resolution was applied', type: OrderStateDto })
+  @ApiBadRequestResponse({
+    description: '`lineId`, `alternativeSource` or `approvedBy` is missing or empty',
+    schema: schemaRef('HttpError'),
+  })
+  @orderNotFoundResponse
+  @ApiConflictResponse({
+    description: 'The Workflow rejected the resolution',
+    schema: schemaRef('HttpError'),
+  })
+  @orderStateUnavailableResponse
+  resolveFulfilmentException(
+    @Param('orderId') orderId: string,
+    @Body() body: ResolveFulfilmentExceptionDto,
+  ): Promise<OrderState> {
+    return this.orders.resolveFulfilmentException(orderId, body);
   }
 }

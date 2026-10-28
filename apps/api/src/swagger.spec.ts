@@ -64,6 +64,8 @@ describe('OpenAPI document', () => {
     ['/v1/checkout-sessions/{id}/complete', 'post'],
     ['/v1/demo/checkout-sessions/{checkoutId}/inventory-failures', 'put'],
     ['/v1/demo/orders/{id}/fulfil', 'post'],
+    ['/v1/demo/orders/{orderId}/fulfilment-exception', 'post'],
+    ['/v1/demo/orders/{orderId}/resolve-fulfilment-exception', 'post'],
     ['/v1/orders/{id}', 'get'],
   ];
 
@@ -156,12 +158,23 @@ describe('OpenAPI document', () => {
   it('resolves every schema reference', () => {
     const schemas = document.components?.schemas ?? {};
 
-    for (const ref of collectRefs(document.paths)) {
+    for (const ref of collectRefs([document.paths, schemas])) {
       expect(ref).toMatch(/^#\/components\/schemas\//);
       expect(schemas).toHaveProperty([ref.replace('#/components/schemas/', '')]);
     }
-    // Components are self-contained so they can be reused without rewriting
-    expect(collectRefs(schemas)).toEqual([]);
+    // Components converted from the UCP SDK are self-contained so they can be
+    // reused without rewriting
+    for (const name of [
+      'UcpProfileDocument',
+      'CheckoutCreateRequest',
+      'CheckoutCompleteRequest',
+      'CheckoutResponse',
+      'Order',
+      'ErrorResponse',
+    ]) {
+      expect(schemas).toHaveProperty([name]);
+      expect(collectRefs(schemas[name])).toEqual([]);
+    }
   });
 
   it('documents UCP request bodies and responses using the SDK schemas', () => {
@@ -282,6 +295,70 @@ describe('OpenAPI document', () => {
     expect(document.components?.schemas?.InventoryFailuresDto).toMatchObject({
       required: ['failures'],
       properties: { failures: { type: 'integer', minimum: 0, maximum: 2147483647 } },
+    });
+  });
+
+  it.each([
+    [
+      '/v1/demo/orders/{orderId}/fulfilment-exception',
+      'ReportFulfilmentExceptionDto',
+      'supplierUnavailable',
+      ['lineId', 'reason'],
+    ],
+    [
+      '/v1/demo/orders/{orderId}/resolve-fulfilment-exception',
+      'ResolveFulfilmentExceptionDto',
+      'alternativeSource',
+      ['lineId', 'alternativeSource', 'approvedBy'],
+    ],
+  ])('documents the demo-only %s endpoint', (path, body, example, required) => {
+    const op = operation(document, path, 'post');
+
+    expect(op.tags).toEqual(['Demo']);
+    expect(op.summary).toContain('demo only');
+    expect(op.description).toContain('not part of UCP');
+    expect(op.parameters).toContainEqual(
+      expect.objectContaining({ name: 'orderId', in: 'path', required: true }),
+    );
+    expect(op.requestBody?.content['application/json'].schema).toEqual({
+      $ref: `#/components/schemas/${body}`,
+    });
+    expect(op.requestBody?.content['application/json'].examples?.[example].value).toMatchObject({
+      lineId: 'li_2',
+    });
+    expect(Object.keys(op.responses).sort()).toEqual(['200', '400', '404', '409', '500']);
+    expect(op.responses['200'].content?.['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/OrderStateDto',
+    });
+    for (const status of ['400', '404', '409']) {
+      expect(op.responses[status].content?.['application/json'].schema).toEqual({
+        $ref: '#/components/schemas/HttpError',
+      });
+    }
+    expect((document.components!.schemas![body] as { required: string[] }).required).toEqual(
+      required,
+    );
+  });
+
+  it('documents the Order Workflow state returned by the demo endpoints', () => {
+    const state = document.components!.schemas!.OrderStateDto as {
+      required: string[];
+      properties: Record<string, { enum?: string[] }>;
+    };
+
+    expect(state.required).toEqual(expect.arrayContaining(['id', 'status', 'fulfilment']));
+    expect(state.properties.status.enum).toEqual([
+      'reserving_inventory',
+      'confirmed',
+      'awaiting_intervention',
+      'fulfilled',
+    ]);
+    expect(document.components!.schemas!.FulfilmentPlanDto).toMatchObject({
+      properties: {
+        exception: { allOf: [{ $ref: '#/components/schemas/FulfilmentExceptionDto' }] },
+        sources: { type: 'array' },
+        resolutions: { type: 'array' },
+      },
     });
   });
 

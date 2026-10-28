@@ -38,6 +38,7 @@ describe('toUcpOrder', () => {
     ],
     total: 6998,
     createdAt: '2026-10-28T12:00:00Z',
+    fulfilment: {},
   };
 
   const map = (o: Order) => toUcpOrder(o, 'https://merchant.example/orders/ord_123', '2026-08-25');
@@ -68,6 +69,27 @@ describe('toUcpOrder', () => {
     ]);
     // The internal Workflow status is not exposed through UCP
     expect(JSON.stringify(ucpOrder)).not.toContain('reserving_inventory');
+  });
+
+  it('reports an Order awaiting intervention as processing without exposing the exception', () => {
+    const ucpOrder = map({
+      ...order,
+      status: 'awaiting_intervention',
+      fulfilment: {
+        exception: {
+          lineId: 'li_2',
+          reason: 'Supplier reports the item is unavailable',
+          raisedAt: '2026-10-28T13:00:00Z',
+        },
+      },
+    });
+
+    expect(OrderSchema.safeParse(ucpOrder).success).toBe(true);
+    expect(ucpOrder.line_items.map((l) => [l.status, l.quantity.fulfilled])).toEqual([
+      ['processing', 0],
+      ['processing', 0],
+    ]);
+    expect(JSON.stringify(ucpOrder)).not.toMatch(/awaiting_intervention|Supplier|exception/);
   });
 
   it('reports every line of a fulfilled Order as fully fulfilled', () => {

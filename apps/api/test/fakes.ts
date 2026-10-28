@@ -1,5 +1,11 @@
 import { Checkout } from '../src/checkout/checkout.schema';
-import { Order, OrderInput } from '../src/temporal/order-workflow';
+import {
+  Order,
+  OrderInput,
+  OrderUpdateRejectedError,
+  ReportFulfilmentExceptionSignal,
+  ResolveFulfilmentExceptionRequest,
+} from '../src/temporal/order-workflow';
 
 // In-memory stand-in for the Mongoose model, covering the queries the service uses
 export class FakeCheckoutModel {
@@ -48,10 +54,13 @@ export class FakeCheckoutModel {
 
 export const ORDER_CREATED_AT = '2026-10-28T12:00:00Z';
 export const ORDER_FULFILLED_AT = '2026-10-28T15:30:00Z';
+export const EXCEPTION_RAISED_AT = '2026-10-28T13:00:00Z';
+export const EXCEPTION_RESOLVED_AT = '2026-10-28T14:00:00Z';
 
 // Stand-in for Temporal that mirrors the Go OrderWorkflow: one Workflow per
-// Workflow ID, confirmed until the markFulfilled Signal, which is ignored once
-// the Order is fulfilled
+// Workflow ID, confirmed until the markFulfilled Signal, which is only applied
+// to confirmed Orders. Fulfilment exceptions follow the Workflow's rules,
+// including its Update rejection messages.
 export class FakeTemporalService {
   readonly workflows = new Map<string, Order>();
 
@@ -64,6 +73,7 @@ export class FakeTemporalService {
         status: 'confirmed',
         total: input.lines.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0),
         createdAt: ORDER_CREATED_AT,
+        fulfilment: {},
       });
     }
   });
@@ -84,4 +94,63 @@ export class FakeTemporalService {
     }
     return true;
   });
+
+  readonly reportFulfilmentException = vi.fn(
+    async (orderId: string, signal: ReportFulfilmentExceptionSignal) => {
+      const order = this.workflows.get(orderId);
+      if (!order) {
+        return false;
+      }
+      // Invalid exceptions are ignored, as Signals cannot be rejected
+      if (
+        order.status === 'confirmed' &&
+        order.lines.some((line) => line.id === signal.lineId) &&
+        signal.reason
+      ) {
+        order.status = 'awaiting_intervention';
+        order.fulfilment.exception = { ...signal, raisedAt: EXCEPTION_RAISED_AT };
+      }
+      return true;
+    },
+  );
+
+  readonly resolveFulfilmentException = vi.fn(
+    async (orderId: string, req: ResolveFulfilmentExceptionRequest) => {
+      const order = this.workflows.get(orderId);
+      if (!order) {
+        return undefined;
+      }
+
+      const exception = order.fulfilment.exception;
+      const reject = (message: string) =>
+        new OrderUpdateRejectedError(message, 'InvalidFulfilmentResolution');
+      if (order.status !== 'awaiting_intervention' || !exception) {
+        throw reject(`order is not awaiting intervention: status is ${order.status}`);
+      }
+      if (req.lineId !== exception.lineId) {
+        throw reject(
+          `line "${req.lineId}" is not affected by the exception: line "${exception.lineId}" is`,
+        );
+      }
+
+      order.fulfilment = {
+        sources: [{ lineId: req.lineId, source: req.alternativeSource }],
+        resolutions: [
+          ...(order.fulfilment.resolutions ?? []),
+          {
+            lineId: exception.lineId,
+            reason: exception.reason,
+            decision: 'alternative_source',
+            alternativeSource: req.alternativeSource,
+            approvedBy: req.approvedBy,
+            note: req.note,
+            raisedAt: exception.raisedAt,
+            resolvedAt: EXCEPTION_RESOLVED_AT,
+          },
+        ],
+      };
+      order.status = 'confirmed';
+      return structuredClone(order);
+    },
+  );
 }
