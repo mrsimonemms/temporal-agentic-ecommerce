@@ -12,6 +12,7 @@ import {
   UcpProfileDocumentSchema,
 } from '@ucp-js/sdk';
 
+import { FakeCheckoutModel, FakeTemporalService } from '../test/fakes';
 import ucp from './config/ucp';
 import { HealthController } from './health/health.controller';
 import { createOpenApiDocument, setupSwagger } from './swagger';
@@ -19,39 +20,14 @@ import { TemporalService } from './temporal/temporal.service';
 import { CheckoutController } from './ucp/checkout.controller';
 import { completeCheckoutExample, createCheckoutExample } from './ucp/checkout.examples';
 import { Checkout } from './ucp/checkout.schema';
+import { DemoController } from './ucp/demo.controller';
+import { OrderController } from './ucp/order.controller';
 import { UcpController } from './ucp/ucp.controller';
 import { UcpService } from './ucp/ucp.service';
 
-// Minimal in-memory Mongoose model covering the queries the service uses
-class FakeCheckoutModel {
-  readonly docs = new Map<string, Checkout>();
-
-  async create(doc: Checkout) {
-    this.docs.set(doc._id, structuredClone(doc));
-    return doc;
-  }
-
-  findById(id: string) {
-    return this.query(this.docs.get(id) ?? null);
-  }
-
-  findOneAndUpdate(filter: { _id: string; status: string }, update: { $set: Partial<Checkout> }) {
-    const doc = this.docs.get(filter._id);
-    if (!doc || doc.status !== filter.status) {
-      return this.query(null);
-    }
-    const updated = { ...doc, ...structuredClone(update.$set) };
-    this.docs.set(updated._id, updated);
-    return this.query(updated);
-  }
-
-  private query(value: Checkout | null) {
-    return { lean: () => ({ exec: async () => structuredClone(value) }) };
-  }
-}
-
 type Operation = {
   summary?: string;
+  description?: string;
   tags?: string[];
   parameters?: { name: string; in: string; required?: boolean }[];
   requestBody?: { content: Record<string, { schema: unknown; examples?: Record<string, any> }> };
@@ -80,17 +56,25 @@ function collectRefs(value: unknown, refs: string[] = []): string[] {
 describe('OpenAPI document', () => {
   let app: NestFastifyApplication;
   let document: OpenAPIObject;
+  let temporal: FakeTemporalService;
 
   beforeEach(async () => {
     vi.stubEnv('SCHEMA_URL', 'http://localhost:9999');
+    temporal = new FakeTemporalService();
 
     const moduleRef = await Test.createTestingModule({
       imports: [ConfigModule.forRoot({ ignoreEnvFile: true, load: [ucp] })],
-      controllers: [UcpController, CheckoutController, HealthController],
+      controllers: [
+        UcpController,
+        CheckoutController,
+        OrderController,
+        DemoController,
+        HealthController,
+      ],
       providers: [
         UcpService,
         { provide: getModelToken(Checkout.name), useValue: new FakeCheckoutModel() },
-        { provide: TemporalService, useValue: { startOrderWorkflow: vi.fn() } },
+        { provide: TemporalService, useValue: temporal },
         {
           provide: HealthCheckService,
           useValue: { check: async () => ({ status: 'ok', info: {}, error: {}, details: {} }) },
@@ -117,10 +101,13 @@ describe('OpenAPI document', () => {
   const endpoints = [
     ['/.well-known/ucp', 'get'],
     ['/health', 'get'],
+    ['/orders/{id}', 'get'],
+    ['/v1/demo/orders/{id}/fulfil', 'post'],
     ['/v1/ucp', 'get'],
     ['/v1/ucp/checkout-sessions', 'post'],
     ['/v1/ucp/checkout-sessions/{id}', 'get'],
     ['/v1/ucp/checkout-sessions/{id}/complete', 'post'],
+    ['/v1/ucp/orders/{id}', 'get'],
     ['/v1/webhooks/ucp/orders', 'post'],
   ];
 
@@ -143,9 +130,17 @@ describe('OpenAPI document', () => {
   });
 
   it.each(endpoints)('routes %s %s to an implemented handler', async (path, method) => {
+    // The Order permalink returns 404 for unknown Orders, so an Order exists
+    await temporal.startOrderWorkflow({
+      id: 'ord_123',
+      buyer: { email: 'jane@example.com' },
+      currency: 'GBP',
+      lines: [{ id: 'li_1', productId: 'sku_kettle', quantity: 1, unitPrice: 3499 }],
+    });
+
     const res = await app.inject({
       method: method.toUpperCase() as 'GET' | 'POST',
-      url: path.replace('{id}', 'chk_missing'),
+      url: path.replace('{id}', path.includes('orders') ? 'ord_123' : 'chk_missing'),
       payload: method === 'post' ? {} : undefined,
     });
 
@@ -210,6 +205,53 @@ describe('OpenAPI document', () => {
     expect(checkoutResponse.required).toEqual(expect.arrayContaining(['id', 'status', 'ucp']));
     expect(checkoutResponse.properties.status.enum).toEqual(
       expect.arrayContaining(['complete_in_progress', 'completed']),
+    );
+  });
+
+  it('documents Order retrieval using the SDK Order schema', () => {
+    const getOrder = operation(document, '/v1/ucp/orders/{id}', 'get');
+
+    expect(getOrder.tags).toEqual(['UCP order']);
+    expect(getOrder.parameters).toContainEqual(
+      expect.objectContaining({ name: 'id', in: 'path', required: true }),
+    );
+    expect(Object.keys(getOrder.responses).sort()).toEqual(['200', '500']);
+    expect(getOrder.responses['200'].content?.['application/json'].schema).toEqual({
+      anyOf: [
+        { $ref: '#/components/schemas/Order' },
+        { $ref: '#/components/schemas/ErrorResponse' },
+      ],
+    });
+
+    const order = document.components!.schemas!.Order as { required: string[] };
+    expect(order.required).toEqual(
+      expect.arrayContaining(['id', 'checkout_id', 'permalink_url', 'line_items', 'fulfillment']),
+    );
+  });
+
+  it('documents the Order permalink as an HTML page', () => {
+    const page = operation(document, '/orders/{id}', 'get');
+
+    expect(page.tags).toEqual(['Order permalink']);
+    expect(Object.keys(page.responses).sort()).toEqual(['200', '404', '500']);
+    expect(Object.keys(page.responses['200'].content ?? {})).toEqual(['text/html']);
+    expect(Object.keys(page.responses['404'].content ?? {})).toEqual(['text/html']);
+  });
+
+  it('identifies the fulfilment control as demo-only', () => {
+    const fulfil = operation(document, '/v1/demo/orders/{id}/fulfil', 'post');
+
+    expect(fulfil.tags).toEqual(['Demo']);
+    expect(fulfil.summary).toContain('demo only');
+    expect(fulfil.description).toContain('not part of UCP');
+    expect(fulfil.requestBody).toBeUndefined();
+    expect(Object.keys(fulfil.responses).sort()).toEqual(['200', '500']);
+    expect(fulfil.parameters).toContainEqual(
+      expect.objectContaining({
+        name: 'id',
+        in: 'path',
+        schema: expect.objectContaining({ example: 'ord_0b6f7c1e-3f0a-4d2b-9a57-2f1c8e0d4b11' }),
+      }),
     );
   });
 

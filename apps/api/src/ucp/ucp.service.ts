@@ -7,6 +7,7 @@ import {
   type CheckoutResponse,
   type ErrorResponse,
   type MessageError,
+  type Order,
   type SelectedPaymentInstrument,
   UcpDiscoveryProfile,
   type UcpProfileDocument,
@@ -17,7 +18,7 @@ import { randomUUID } from 'node:crypto';
 import { TemporalService } from '../temporal/temporal.service';
 import { CATALOGUE_CURRENCY, findProduct } from './catalogue';
 import { Checkout, CheckoutLineItem, CheckoutOrder, CheckoutPayment } from './checkout.schema';
-import { toOrderInput } from './order.mapper';
+import { checkoutIdForOrder, toOrderInput, toUcpOrder } from './order.mapper';
 
 @Injectable()
 export class UcpService {
@@ -100,7 +101,7 @@ export class UcpService {
   async getCheckout(id: string): Promise<CheckoutResponse | ErrorResponse> {
     const checkout = await this.checkouts.findById(id).lean<Checkout>().exec();
     if (!checkout) {
-      return this.notFound(id);
+      return this.notFound('Checkout', id);
     }
 
     return this.checkoutResponse(checkout);
@@ -112,7 +113,7 @@ export class UcpService {
   ): Promise<CheckoutResponse | ErrorResponse> {
     const checkout = await this.checkouts.findById(id).lean<Checkout>().exec();
     if (!checkout) {
-      return this.notFound(id);
+      return this.notFound('Checkout', id);
     }
 
     if (checkout.status === 'incomplete') {
@@ -191,6 +192,30 @@ export class UcpService {
     return this.placeOrder(accepted);
   }
 
+  async getOrder(id: string): Promise<Order | ErrorResponse> {
+    return (await this.findOrder(id)) ?? this.notFound('Order', id);
+  }
+
+  // Demo-only: signals the Order Workflow to mark the Order as fulfilled and
+  // returns the resulting Order. This is not a UCP operation.
+  async markOrderFulfilled(id: string): Promise<Order | ErrorResponse> {
+    if (!checkoutIdForOrder(id) || !(await this.temporal.markOrderFulfilled(id))) {
+      return this.notFound('Order', id);
+    }
+    return this.getOrder(id);
+  }
+
+  // The Order Workflow is the authoritative source of Order state. Only IDs
+  // that can have been issued for a UCP checkout are queried.
+  async findOrder(id: string): Promise<Order | undefined> {
+    if (!checkoutIdForOrder(id)) {
+      return undefined;
+    }
+
+    const order = await this.temporal.getOrder(id);
+    return order && toUcpOrder(order, this.orderPermalinkUrl(order.id), this.ucpVersion());
+  }
+
   // Starts the Order Workflow and then records the Order against the
   // checkout. Both steps are idempotent, so if either fails the checkout
   // remains complete_in_progress and a repeated completion request resumes
@@ -233,8 +258,8 @@ export class UcpService {
     return this.checkoutResponse(completed);
   }
 
-  // Demo-specific buyer-facing URL for the Order, served from the same origin
-  // as the API
+  // Buyer-facing Order page, distinct from the UCP Order API endpoint and
+  // served from the same origin as the API
   private orderPermalinkUrl(orderId: string): string {
     return new URL(`/orders/${orderId}`, this.config.getOrThrow<string>('SCHEMA_URL')).toString();
   }
@@ -323,12 +348,12 @@ export class UcpService {
     };
   }
 
-  private notFound(id: string): ErrorResponse {
+  private notFound(resource: 'Checkout' | 'Order', id: string): ErrorResponse {
     return this.errorResponse([
       {
         type: 'error',
         code: 'not_found',
-        content: `Checkout "${id}" was not found`,
+        content: `${resource} "${id}" was not found`,
         severity: 'unrecoverable',
       },
     ]);

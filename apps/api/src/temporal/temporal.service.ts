@@ -1,15 +1,27 @@
 import { Inject, Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { HealthIndicatorResult, HealthIndicatorStatus } from '@nestjs/terminus';
-import { Client, Connection, WorkflowExecutionAlreadyStartedError } from '@temporalio/client';
+import {
+  Client,
+  Connection,
+  WorkflowExecutionAlreadyStartedError,
+  WorkflowNotFoundError,
+} from '@temporalio/client';
 import { grpc as grpcProto } from '@temporalio/proto';
 import { setTimeout } from 'timers/promises';
 
-import { ORDER_TASK_QUEUE, ORDER_WORKFLOW_TYPE, OrderInput } from './order-workflow';
+import {
+  ORDER_QUERY_GET_ORDER,
+  ORDER_SIGNAL_MARK_FULFILLED,
+  ORDER_TASK_QUEUE,
+  ORDER_WORKFLOW_TYPE,
+  Order,
+  OrderInput,
+} from './order-workflow';
 import { CONNECTION, WORKFLOW_CLIENT } from './temporal.providers';
 
-// Upper bound on a Workflow start so an unavailable Temporal fails the request
-// promptly rather than holding it open while the client retries
-const START_WORKFLOW_TIMEOUT_MS = 5000;
+// Upper bound on each Temporal request so an unavailable Temporal fails the
+// request promptly rather than holding it open while the client retries
+const REQUEST_TIMEOUT_MS = 5000;
 
 @Injectable()
 export class TemporalService implements OnApplicationShutdown {
@@ -26,7 +38,7 @@ export class TemporalService implements OnApplicationShutdown {
   // closed, no new Workflow is created.
   async startOrderWorkflow(input: OrderInput): Promise<void> {
     try {
-      await this.client.withDeadline(Date.now() + START_WORKFLOW_TIMEOUT_MS, () =>
+      await this.withDeadline(() =>
         this.client.workflow.start(ORDER_WORKFLOW_TYPE, {
           taskQueue: ORDER_TASK_QUEUE,
           workflowId: input.id,
@@ -42,6 +54,42 @@ export class TemporalService implements OnApplicationShutdown {
       }
       throw err;
     }
+  }
+
+  // Returns the current state of an Order, or undefined if no Order Workflow
+  // exists with that ID
+  async getOrder(orderId: string): Promise<Order | undefined> {
+    try {
+      return await this.withDeadline(() =>
+        this.client.workflow.getHandle(orderId).query<Order>(ORDER_QUERY_GET_ORDER),
+      );
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        return undefined;
+      }
+      throw err;
+    }
+  }
+
+  // Signals the Order Workflow to mark the Order as fulfilled. Returns false if
+  // no running Order Workflow exists with that ID.
+  async markOrderFulfilled(orderId: string): Promise<boolean> {
+    try {
+      // The payload matches the Go MarkFulfilledSignal struct
+      await this.withDeadline(() =>
+        this.client.workflow.getHandle(orderId).signal(ORDER_SIGNAL_MARK_FULFILLED, {}),
+      );
+      return true;
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        return false;
+      }
+      throw err;
+    }
+  }
+
+  private withDeadline<T>(fn: () => Promise<T>): Promise<T> {
+    return this.client.withDeadline(Date.now() + REQUEST_TIMEOUT_MS, fn);
   }
 
   // Close connection once there are no further connections possible

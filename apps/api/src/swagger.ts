@@ -11,6 +11,7 @@ import {
   CheckoutCreateRequestSchema,
   CheckoutResponseSchema,
   ErrorResponseSchema,
+  OrderSchema,
   UcpProfileDocumentSchema,
 } from '@ucp-js/sdk';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -23,6 +24,7 @@ const ucpSchemas = {
   CheckoutCreateRequest: CheckoutCreateRequestSchema,
   CheckoutCompleteRequest: CheckoutCompleteRequestSchema,
   CheckoutResponse: CheckoutResponseSchema,
+  Order: OrderSchema,
   ErrorResponse: ErrorResponseSchema,
 };
 
@@ -85,6 +87,9 @@ export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
       'UCP checkout',
       'UCP checkout capability REST binding. Business outcomes are returned as UCP responses with HTTP 200 or 201.',
     )
+    .addTag('UCP order', 'UCP order capability REST binding')
+    .addTag('Order permalink', 'Buyer-facing Order pages linked from `permalink_url`')
+    .addTag('Demo', 'Demo-only controls that are not part of UCP')
     .addTag('Health', 'Service health')
     .addTag('Placeholders', 'Demo-specific endpoints that are not yet implemented')
     .build();
