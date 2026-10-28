@@ -22,9 +22,10 @@ const (
 type OrderStatus string
 
 const (
-	OrderStatusReservingInventory OrderStatus = "reserving_inventory"
-	OrderStatusConfirmed          OrderStatus = "confirmed"
-	OrderStatusFulfilled          OrderStatus = "fulfilled"
+	OrderStatusReservingInventory   OrderStatus = "reserving_inventory"
+	OrderStatusConfirmed            OrderStatus = "confirmed"
+	OrderStatusAwaitingIntervention OrderStatus = "awaiting_intervention"
+	OrderStatusFulfilled            OrderStatus = "fulfilled"
 )
 
 // inventoryActivityOptions retries the inventory reservation quickly enough to
@@ -87,6 +88,8 @@ type Order struct {
 	FulfilledAt *time.Time  `json:"fulfilledAt,omitempty"`
 	// Set once inventory has been reserved for every line
 	InventoryReservationID string `json:"inventoryReservationId,omitempty"`
+	// How the Order is fulfilled, separate from what was purchased
+	Fulfilment FulfilmentPlan `json:"fulfilment"`
 }
 
 // MarkFulfilledSignal is the payload of the SignalMarkFulfilled Signal
@@ -208,6 +211,9 @@ func OrderWorkflow(ctx workflow.Context, input *OrderInput) error {
 		order.FulfilledAt = &now
 		logger.Info("Order fulfilled", "orderId", order.ID)
 	})
+	if err := registerFulfilmentExceptionHandlers(ctx, selector, order, logger); err != nil {
+		return fmt.Errorf("error registering fulfilment exception handlers: %w", err)
+	}
 	selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {})
 
 	// Keep processing events until the Workflow is cancelled

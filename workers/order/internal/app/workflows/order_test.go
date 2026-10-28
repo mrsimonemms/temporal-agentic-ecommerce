@@ -34,6 +34,11 @@ func delayReservation(env *testsuite.TestWorkflowEnvironment, d time.Duration) {
 		Return(&activities.InventoryReservation{ID: "res_order-123"}, nil)
 }
 
+const (
+	kettleLineID = "line-1"
+	mugLineID    = "line-2"
+)
+
 func newInput() *workflows.OrderInput {
 	return &workflows.OrderInput{
 		ID: "order-123",
@@ -44,8 +49,8 @@ func newInput() *workflows.OrderInput {
 		},
 		Currency: "GBP",
 		Lines: []workflows.OrderLine{
-			{ID: "line-1", ProductID: "sku-kettle", Title: "Kettle", Quantity: 1, UnitPrice: 2999},
-			{ID: "line-2", ProductID: "sku-mug", Title: "Mug", Quantity: 4, UnitPrice: 650},
+			{ID: kettleLineID, ProductID: "sku-kettle", Title: "Kettle", Quantity: 1, UnitPrice: 2999},
+			{ID: mugLineID, ProductID: "sku-mug", Title: "Mug", Quantity: 4, UnitPrice: 650},
 		},
 	}
 }
