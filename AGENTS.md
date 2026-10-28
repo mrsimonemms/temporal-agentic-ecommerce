@@ -286,6 +286,23 @@ Separate:
 This separation should be logical and maintainable, not an excuse to create
 excessive layers or interfaces.
 
+### API documentation is mandatory
+
+Every endpoint exposed by `apps/api` must have accurate Swagger/OpenAPI
+documentation.
+
+- Create or update the documentation for new or modified endpoints as part of
+  the same change.
+- Describe the actual implemented behaviour, including request validation,
+  request bodies, responses, HTTP status codes and errors.
+- Reuse existing schemas, such as the official `@ucp-js/sdk` schemas, rather
+  than duplicating them in hand-maintained DTOs where practical.
+- Do not advertise unimplemented functionality as operational. Placeholders
+  must be documented as placeholders.
+
+Swagger/OpenAPI documentation belongs exclusively to `apps/api`. Do not
+introduce Swagger or OpenAPI tooling elsewhere in the repository.
+
 ### Quality gates are mandatory
 
 All applicable formatting, linting, build and test checks must pass before work
