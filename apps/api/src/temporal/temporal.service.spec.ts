@@ -1,12 +1,19 @@
 import { Test } from '@nestjs/testing';
 import {
   ApplicationFailure,
+  TerminatedFailure,
   WorkflowExecutionAlreadyStartedError,
+  WorkflowFailedError,
   WorkflowNotFoundError,
   WorkflowUpdateFailedError,
 } from '@temporalio/client';
 
 import { OrderInput, OrderUpdateRejectedError } from './order-workflow';
+import {
+  PurchaseDecisionRejectedError,
+  ShoppingAgent,
+  ShoppingAgentInput,
+} from './shopping-agent-workflow';
 import { CONNECTION, WORKFLOW_CLIENT } from './temporal.providers';
 import { TemporalService } from './temporal.service';
 
@@ -23,6 +30,8 @@ describe('TemporalService', () => {
   let query: ReturnType<typeof vi.fn>;
   let signal: ReturnType<typeof vi.fn>;
   let executeUpdate: ReturnType<typeof vi.fn>;
+  let describe_: ReturnType<typeof vi.fn>;
+  let result: ReturnType<typeof vi.fn>;
   let getHandle: ReturnType<typeof vi.fn>;
   let withDeadline: ReturnType<typeof vi.fn>;
 
@@ -31,7 +40,9 @@ describe('TemporalService', () => {
     query = vi.fn();
     signal = vi.fn().mockResolvedValue(undefined);
     executeUpdate = vi.fn();
-    getHandle = vi.fn(() => ({ query, signal, executeUpdate }));
+    describe_ = vi.fn();
+    result = vi.fn();
+    getHandle = vi.fn(() => ({ query, signal, executeUpdate, describe: describe_, result }));
     withDeadline = vi.fn((_deadline: number, fn: () => Promise<unknown>) => fn());
 
     const moduleRef = await Test.createTestingModule({
@@ -202,6 +213,186 @@ describe('TemporalService', () => {
       await expect(service.resolveFulfilmentException('ord_123', req)).rejects.toThrow(
         'Temporal unavailable',
       );
+    });
+  });
+
+  describe('Shopping Agent', () => {
+    const agentId = 'agent_123';
+
+    const agentInput: ShoppingAgentInput = {
+      request: 'Buy me a kettle and two sets of mugs. Keep it under £100.',
+      buyer: { email: 'ada@example.com', name: 'Ada Lovelace' },
+      demo: { inventoryFailures: 2 },
+    };
+
+    const agent: ShoppingAgent = {
+      id: agentId,
+      status: 'purchased',
+      request: agentInput.request,
+      buyer: agentInput.buyer,
+      checkoutId: 'chk_123',
+      orderId: 'ord_123',
+      createdAt: '2026-11-08T12:00:00Z',
+    };
+
+    function described(status: string, type = 'ShoppingAgentWorkflow') {
+      describe_.mockResolvedValue({ type, status: { name: status } });
+    }
+
+    describe('startShoppingAgentWorkflow', () => {
+      it('starts the Go ShoppingAgentWorkflow with a new Workflow ID', async () => {
+        await service.startShoppingAgentWorkflow(agentId, agentInput);
+
+        expect(start).toHaveBeenCalledExactlyOnceWith('ShoppingAgentWorkflow', {
+          taskQueue: 'order-management',
+          workflowId: agentId,
+          args: [agentInput],
+          workflowIdConflictPolicy: 'FAIL',
+          workflowIdReusePolicy: 'REJECT_DUPLICATE',
+        });
+        expect(withDeadline).toHaveBeenCalledOnce();
+      });
+    });
+
+    describe('getShoppingAgent', () => {
+      it('queries a running Workflow', async () => {
+        described('RUNNING');
+        query.mockResolvedValue({ ...agent, status: 'awaiting_approval' });
+
+        await expect(service.getShoppingAgent(agentId)).resolves.toMatchObject({
+          status: 'awaiting_approval',
+        });
+        expect(getHandle).toHaveBeenCalledWith(agentId);
+        expect(query).toHaveBeenCalledExactlyOnceWith('getShoppingAgent');
+        expect(result).not.toHaveBeenCalled();
+      });
+
+      it('returns the result of a completed Workflow without querying it', async () => {
+        described('COMPLETED');
+        result.mockResolvedValue(agent);
+
+        await expect(service.getShoppingAgent(agentId)).resolves.toEqual(agent);
+        expect(query).not.toHaveBeenCalled();
+      });
+
+      it('returns the state attached to the failure of a failed Workflow', async () => {
+        described('FAILED');
+        const failed = { ...agent, status: 'failed', error: 'checkout was not completed' };
+        result.mockRejectedValue(
+          new WorkflowFailedError(
+            'Workflow execution failed',
+            ApplicationFailure.create({
+              message: 'unable to complete purchase',
+              type: 'PurchaseFailed',
+              nonRetryable: true,
+              details: [failed],
+            }),
+            'NON_RETRYABLE_FAILURE',
+          ),
+        );
+
+        await expect(service.getShoppingAgent(agentId)).resolves.toEqual(failed);
+        expect(query).not.toHaveBeenCalled();
+      });
+
+      it('reports a Workflow that ended without state as failed', async () => {
+        described('TERMINATED');
+        result.mockRejectedValue(
+          new WorkflowFailedError(
+            'Workflow execution terminated',
+            new TerminatedFailure('Terminated by operator'),
+            'NON_RETRYABLE_FAILURE',
+          ),
+        );
+
+        await expect(service.getShoppingAgent(agentId)).resolves.toEqual({
+          id: agentId,
+          status: 'failed',
+          error: 'Terminated by operator',
+        });
+      });
+
+      it('returns undefined when no Workflow exists', async () => {
+        describe_.mockRejectedValue(new WorkflowNotFoundError('not found', agentId, undefined));
+
+        await expect(service.getShoppingAgent(agentId)).resolves.toBeUndefined();
+      });
+
+      it('returns undefined for a Workflow of another type', async () => {
+        described('RUNNING', 'OrderWorkflow');
+
+        await expect(service.getShoppingAgent(agentId)).resolves.toBeUndefined();
+        expect(query).not.toHaveBeenCalled();
+      });
+
+      it('propagates other failures', async () => {
+        describe_.mockRejectedValue(new Error('Temporal unavailable'));
+
+        await expect(service.getShoppingAgent(agentId)).rejects.toThrow('Temporal unavailable');
+      });
+    });
+
+    describe('decidePurchase', () => {
+      const approve = { decision: 'approve' as const, decidedBy: 'ada@example.com' };
+
+      it('executes the decidePurchase Update with the Go payload', async () => {
+        described('RUNNING');
+        executeUpdate.mockResolvedValue({ ...agent, status: 'approved' });
+
+        await expect(service.decidePurchase(agentId, approve)).resolves.toMatchObject({
+          status: 'approved',
+        });
+        expect(executeUpdate).toHaveBeenCalledExactlyOnceWith('decidePurchase', {
+          args: [approve],
+        });
+      });
+
+      it('translates a rejected Update into PurchaseDecisionRejectedError', async () => {
+        described('RUNNING');
+        executeUpdate.mockRejectedValue(
+          new WorkflowUpdateFailedError(
+            'Workflow Update failed',
+            ApplicationFailure.create({
+              message: 'shopping agent is not awaiting approval: status is planning',
+              type: 'InvalidPurchaseDecision',
+              nonRetryable: true,
+            }),
+          ),
+        );
+
+        const err = await service.decidePurchase(agentId, approve).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(PurchaseDecisionRejectedError);
+        expect(err).toMatchObject({
+          message: 'shopping agent is not awaiting approval: status is planning',
+          type: 'InvalidPurchaseDecision',
+        });
+      });
+
+      it('rejects a decision for a Workflow that has finished without sending an Update', async () => {
+        described('COMPLETED');
+
+        await expect(service.decidePurchase(agentId, approve)).rejects.toBeInstanceOf(
+          PurchaseDecisionRejectedError,
+        );
+        expect(executeUpdate).not.toHaveBeenCalled();
+      });
+
+      it('rejects a decision when the Workflow closes before the Update is delivered', async () => {
+        described('RUNNING');
+        executeUpdate.mockRejectedValue(new WorkflowNotFoundError('completed', agentId, undefined));
+
+        await expect(service.decidePurchase(agentId, approve)).rejects.toBeInstanceOf(
+          PurchaseDecisionRejectedError,
+        );
+      });
+
+      it('returns undefined when no Shopping Agent Workflow exists', async () => {
+        described('RUNNING', 'OrderWorkflow');
+
+        await expect(service.decidePurchase(agentId, approve)).resolves.toBeUndefined();
+        expect(executeUpdate).not.toHaveBeenCalled();
+      });
     });
   });
 });

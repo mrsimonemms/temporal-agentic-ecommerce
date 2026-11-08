@@ -5,6 +5,8 @@ import {
   Client,
   Connection,
   WorkflowExecutionAlreadyStartedError,
+  WorkflowFailedError,
+  WorkflowHandle,
   WorkflowNotFoundError,
   WorkflowUpdateFailedError,
 } from '@temporalio/client';
@@ -24,6 +26,16 @@ import {
   ReportFulfilmentExceptionSignal,
   ResolveFulfilmentExceptionRequest,
 } from './order-workflow';
+import {
+  ClosedShoppingAgent,
+  DecidePurchaseRequest,
+  PurchaseDecisionRejectedError,
+  SHOPPING_AGENT_QUERY_GET,
+  SHOPPING_AGENT_UPDATE_DECIDE_PURCHASE,
+  SHOPPING_AGENT_WORKFLOW_TYPE,
+  ShoppingAgent,
+  ShoppingAgentInput,
+} from './shopping-agent-workflow';
 import { CONNECTION, WORKFLOW_CLIENT } from './temporal.providers';
 
 // Upper bound on each Temporal request so an unavailable Temporal fails the
@@ -144,6 +156,114 @@ export class TemporalService implements OnApplicationShutdown {
     }
   }
 
+  // Starts a Shopping Agent Workflow. Each agent has a new ID, so an existing
+  // Workflow with the same ID is never reused.
+  async startShoppingAgentWorkflow(id: string, input: ShoppingAgentInput): Promise<void> {
+    await this.withDeadline(() =>
+      this.client.workflow.start(SHOPPING_AGENT_WORKFLOW_TYPE, {
+        taskQueue: ORDER_TASK_QUEUE,
+        workflowId: id,
+        args: [input],
+        workflowIdConflictPolicy: 'FAIL',
+        workflowIdReusePolicy: 'REJECT_DUPLICATE',
+      }),
+    );
+  }
+
+  // Returns the Shopping Agent state, or undefined if no Shopping Agent
+  // Workflow exists with that ID. A running Workflow is queried. A closed
+  // Workflow is not queried: its final state is its result or, if it failed,
+  // the state attached to its failure.
+  async getShoppingAgent(id: string): Promise<ShoppingAgent | ClosedShoppingAgent | undefined> {
+    const handle = this.client.workflow.getHandle(id);
+    const status = await this.shoppingAgentStatus(handle);
+
+    switch (status) {
+      case undefined:
+        return undefined;
+      case 'RUNNING':
+        return this.withDeadline(() => handle.query<ShoppingAgent>(SHOPPING_AGENT_QUERY_GET));
+      case 'COMPLETED':
+        return this.withDeadline(() => handle.result() as Promise<ShoppingAgent>);
+      default:
+        return this.closedShoppingAgent(id, handle);
+    }
+  }
+
+  // Executes the Update approving or rejecting the proposed purchase and
+  // returns the resulting state, or undefined if no Shopping Agent Workflow
+  // exists. Throws PurchaseDecisionRejectedError when the Workflow rejects
+  // the decision or has already finished.
+  async decidePurchase(id: string, req: DecidePurchaseRequest): Promise<ShoppingAgent | undefined> {
+    const handle = this.client.workflow.getHandle(id);
+    const status = await this.shoppingAgentStatus(handle);
+    if (status === undefined) {
+      return undefined;
+    }
+
+    const finished = () =>
+      new PurchaseDecisionRejectedError('shopping agent has finished and cannot accept a decision');
+    if (status !== 'RUNNING') {
+      throw finished();
+    }
+
+    try {
+      return await this.withDeadline(() =>
+        handle.executeUpdate<ShoppingAgent, [DecidePurchaseRequest]>(
+          SHOPPING_AGENT_UPDATE_DECIDE_PURCHASE,
+          { args: [req] },
+        ),
+      );
+    } catch (err) {
+      if (err instanceof WorkflowUpdateFailedError && err.cause instanceof ApplicationFailure) {
+        throw new PurchaseDecisionRejectedError(err.cause.message, err.cause.type ?? undefined);
+      }
+      // The Workflow closed after it was described
+      if (err instanceof WorkflowNotFoundError) {
+        throw finished();
+      }
+      throw err;
+    }
+  }
+
+  // Returns the Temporal status of a Shopping Agent Workflow, or undefined if
+  // no Workflow exists or it is not a Shopping Agent
+  private async shoppingAgentStatus(handle: WorkflowHandle): Promise<string | undefined> {
+    try {
+      const description = await this.withDeadline(() => handle.describe());
+      return description.type === SHOPPING_AGENT_WORKFLOW_TYPE
+        ? description.status.name
+        : undefined;
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        return undefined;
+      }
+      throw err;
+    }
+  }
+
+  private async closedShoppingAgent(
+    id: string,
+    handle: WorkflowHandle,
+  ): Promise<ShoppingAgent | ClosedShoppingAgent> {
+    try {
+      return (await this.withDeadline(() => handle.result())) as ShoppingAgent;
+    } catch (err) {
+      if (!(err instanceof WorkflowFailedError)) {
+        throw err;
+      }
+
+      // The Workflow attaches its final state to planning and purchase failures
+      const [state] = err.cause instanceof ApplicationFailure ? (err.cause.details ?? []) : [];
+      if (isShoppingAgent(state)) {
+        return state;
+      }
+
+      // Ended without recording its state, for example when terminated
+      return { id, status: 'failed', error: err.cause?.message || err.message };
+    }
+  }
+
   private withDeadline<T>(fn: () => Promise<T>): Promise<T> {
     return this.client.withDeadline(Date.now() + REQUEST_TIMEOUT_MS, fn);
   }
@@ -183,4 +303,10 @@ export class TemporalService implements OnApplicationShutdown {
       },
     };
   }
+}
+
+function isShoppingAgent(value: unknown): value is ShoppingAgent {
+  return (
+    !!value && typeof value === 'object' && 'id' in value && 'status' in value && 'request' in value
+  );
 }

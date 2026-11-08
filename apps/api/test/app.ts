@@ -11,6 +11,7 @@ import ucp from '../src/config/ucp';
 import { DemoModule } from '../src/demo/demo.module';
 import { HealthModule } from '../src/health/health.module';
 import { OrderModule } from '../src/order/order.module';
+import { ShoppingAgentModule } from '../src/shopping-agent/shopping-agent.module';
 import { CONNECTION, WORKFLOW_CLIENT } from '../src/temporal/temporal.providers';
 import { TemporalService } from '../src/temporal/temporal.service';
 import { UcpModule } from '../src/ucp/ucp.module';
@@ -38,6 +39,7 @@ export async function createTestApp(): Promise<TestApp> {
       CheckoutModule,
       OrderModule,
       DemoModule,
+      ShoppingAgentModule,
     ],
   })
     .overrideProvider(getModelToken(Checkout.name))

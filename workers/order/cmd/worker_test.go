@@ -18,10 +18,12 @@ import (
 const (
 	errMissingKey   = "OpenAI API key is required"
 	errEmptyModel   = "OpenAI model cannot be empty"
+	errCommerceURL  = "Commerce API URL must be an absolute http or https URL"
 	envModel        = "gpt-from-environment"
 	flagModel       = "gpt-from-flag"
 	modelFlagOption = "--openai-model"
 	workerCommand   = "worker"
+	composeAPIURL   = "http://api:9999/v1"
 )
 
 // newWorker builds the command tree as the binary does, so configuration is
@@ -126,14 +128,15 @@ func fakeTemporal(t *testing.T) (address string, connections *atomic.Int32) {
 	return l.Addr().String(), connections
 }
 
-func TestWorkerRejectsInvalidOpenAIConfigBeforeConnecting(t *testing.T) {
+func TestWorkerRejectsInvalidConfigBeforeConnecting(t *testing.T) {
 	apiKey := "sk-test-" + rand.Text()
 
 	tests := map[string]struct {
-		envKey   string
-		envModel string
-		args     []string
-		expected string
+		envKey         string
+		envModel       string
+		envCommerceURL string
+		args           []string
+		expected       string
 	}{
 		"missing API key": {
 			expected: errMissingKey,
@@ -157,12 +160,28 @@ func TestWorkerRejectsInvalidOpenAIConfigBeforeConnecting(t *testing.T) {
 			envModel: "   ",
 			expected: errEmptyModel,
 		},
+		"empty commerce API URL flag": {
+			envKey:   apiKey,
+			args:     []string{"--commerce-api-url", ""},
+			expected: errCommerceURL,
+		},
+		"relative commerce API URL": {
+			envKey:         apiKey,
+			envCommerceURL: "localhost:9999/v1",
+			expected:       errCommerceURL,
+		},
+		"unsupported commerce API URL scheme": {
+			envKey:         apiKey,
+			envCommerceURL: "ftp://api.example.com/v1",
+			expected:       errCommerceURL,
+		},
 	}
 
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("OPENAI_API_KEY", test.envKey)
 			t.Setenv("OPENAI_MODEL", test.envModel)
+			t.Setenv("COMMERCE_API_URL", test.envCommerceURL)
 			address, connections := fakeTemporal(t)
 
 			root, _ := newWorker(t)
@@ -222,6 +241,41 @@ func TestWorkerAcceptsValidOpenAIConfig(t *testing.T) {
 			require.NoError(t, worker.PreRunE(worker, nil))
 			_, model := openAIConfig(t, worker)
 			assert.Equal(t, test.expectedModel, model)
+		})
+	}
+}
+
+func TestWorkerCommerceAPIURLConfig(t *testing.T) {
+	tests := map[string]struct {
+		env      string
+		args     []string
+		expected string
+	}{
+		"default": {
+			expected: activities.DefaultCommerceAPIURL,
+		},
+		"from environment": {
+			env:      composeAPIURL,
+			expected: composeAPIURL,
+		},
+		"flag overrides environment": {
+			env:      composeAPIURL,
+			args:     []string{"--commerce-api-url", "https://commerce.example.com/v1"},
+			expected: "https://commerce.example.com/v1",
+		},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("OPENAI_API_KEY", "sk-test-"+rand.Text())
+			t.Setenv("OPENAI_MODEL", "")
+			t.Setenv("COMMERCE_API_URL", test.env)
+
+			_, worker := newWorker(t)
+			require.NoError(t, worker.ParseFlags(test.args))
+
+			require.NoError(t, worker.PreRunE(worker, nil))
+			assert.Equal(t, test.expected, worker.Flags().Lookup("commerce-api-url").Value.String())
 		})
 	}
 }

@@ -73,6 +73,7 @@ services:
       args:
         PROJECT_NAME: order
     environment:
+      COMMERCE_API_URL: http://api:9999/v1
       LOG_LEVEL: "${LOG_LEVEL:-debug}"
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       TEMPORAL_ADDRESS: ${TEMPORAL_ADDRESS:-temporal:7233}

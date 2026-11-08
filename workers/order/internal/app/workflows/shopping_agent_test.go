@@ -19,6 +19,7 @@ import (
 const (
 	agentWorkflowID = "shopping-agent-123"
 	buyerEmail      = "ada@example.com"
+	kettleRequest   = "Buy me a kettle under £50"
 )
 
 var kettleAndMugs = &activities.PurchaseProposal{
@@ -50,14 +51,35 @@ func newAgentInput() *workflows.ShoppingAgentInput {
 	}
 }
 
+// catalogue is the snapshot returned by the mocked GetCatalogue Activity: the
+// products and prices the proposal is built from
+var catalogue = catalogueFor(kettleAndMugs)
+
+func catalogueFor(proposal *activities.PurchaseProposal) *activities.Catalogue {
+	c := &activities.Catalogue{Currency: proposal.Currency}
+	for _, l := range proposal.Lines {
+		c.Products = append(c.Products, activities.Product{ID: l.ProductID, Title: l.Title, UnitPrice: l.UnitPrice})
+	}
+	return c
+}
+
+// planningInput is what PlanPurchase must receive: the request and the
+// catalogue snapshot recorded by GetCatalogue
+func planningInput() *activities.PlanPurchaseInput {
+	return &activities.PlanPurchaseInput{Request: newAgentInput().Request, Catalogue: *catalogue}
+}
+
 // newAgentEnv returns a test environment where planning takes the given
-// duration and returns the given plan or error. OpenAI is never called.
+// duration and returns the given plan or error. Planning only succeeds if it
+// receives the retrieved catalogue. Neither the commerce API nor OpenAI is
+// called.
 func newAgentEnv(d time.Duration, plan *activities.PurchasePlan, err error) *testsuite.TestWorkflowEnvironment {
 	env := newEnv()
 	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: agentWorkflowID})
 
 	var a *activities.Activities
-	env.OnActivity(a.PlanPurchase, mock.Anything, activities.PlanPurchaseInput{Request: newAgentInput().Request}).
+	env.OnActivity(a.GetCatalogue, mock.Anything).Return(catalogue, nil)
+	env.OnActivity(a.PlanPurchase, mock.Anything, planningInput()).
 		After(d).
 		Return(plan, err)
 	return env
@@ -155,6 +177,8 @@ func TestShoppingAgentAwaitsApproval(t *testing.T) {
 
 func TestShoppingAgentApproval(t *testing.T) {
 	env := newAgentEnv(time.Second, &activities.PurchasePlan{Proposal: kettleAndMugs}, nil)
+	// Checkout takes long enough to observe the purchase in progress
+	mockPurchase(env, 5*time.Minute)
 
 	var result *decisionResult
 	env.RegisterDelayedCallback(func() {
@@ -165,33 +189,44 @@ func TestShoppingAgentApproval(t *testing.T) {
 		require.True(t, result.accepted)
 		require.NoError(t, result.err)
 		require.NotNil(t, result.value)
+		// The Update returns the recorded decision before purchasing starts
 		assert.Equal(t, workflows.ShoppingAgentStatusApproved, result.value.Status)
+		require.NotNil(t, result.value.Decision)
+		assert.Equal(t, workflows.PurchaseDecisionApprove, result.value.Decision.Decision)
 
 		agent := queryAgent(t, env)
-		assert.Equal(t, workflows.ShoppingAgentStatusApproved, agent.Status)
+		assert.Equal(t, workflows.ShoppingAgentStatusPurchasing, agent.Status)
 		assert.Equal(t, kettleAndMugs, agent.Proposal)
 		require.NotNil(t, agent.Decision)
-		assert.Equal(t, workflows.PurchaseDecisionApprove, agent.Decision.Decision)
 		assert.Equal(t, approve.DecidedBy, agent.Decision.DecidedBy)
 		assert.Equal(t, approve.Note, agent.Decision.Note)
 		assert.False(t, agent.Decision.DecidedAt.IsZero())
-		assert.Equal(t, result.value, agent)
-	}, 2*time.Minute)
-
-	// The approved Workflow remains open and queryable, awaiting checkout
-	env.RegisterDelayedCallback(func() {
+		assert.Empty(t, agent.CheckoutID)
 		assert.False(t, env.IsWorkflowCompleted())
-		assert.Equal(t, workflows.ShoppingAgentStatusApproved, queryAgent(t, env).Status)
-		env.CancelWorkflow()
-	}, 30*24*time.Hour)
+	}, 2*time.Minute)
 
 	env.ExecuteWorkflow(workflows.ShoppingAgentWorkflow, newAgentInput())
 
-	assertCancelled(t, env)
+	// The Workflow completes with the purchase rather than waiting for the Order
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var agent workflows.ShoppingAgent
+	require.NoError(t, env.GetWorkflowResult(&agent))
+	assert.Equal(t, workflows.ShoppingAgentStatusPurchased, agent.Status)
+	assert.Equal(t, checkoutCreated.ID, agent.CheckoutID)
+	assert.Equal(t, checkoutCompleted.OrderID, agent.OrderID)
+	assert.Equal(t, checkoutCompleted.OrderPermalinkURL, agent.OrderPermalinkURL)
+	assert.Equal(t, kettleAndMugs, agent.Proposal)
+	require.NotNil(t, agent.Decision)
+	assert.Equal(t, workflows.PurchaseDecisionApprove, agent.Decision.Decision)
+	assert.Empty(t, agent.Error)
 }
 
 func TestShoppingAgentRejection(t *testing.T) {
 	env := newAgentEnv(time.Second, &activities.PurchasePlan{Proposal: kettleAndMugs}, nil)
+	mockPurchase(env, 0)
+	started := recordActivities(env)
 
 	var result *decisionResult
 	env.RegisterDelayedCallback(func() {
@@ -202,6 +237,8 @@ func TestShoppingAgentRejection(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 	require.NoError(t, env.GetWorkflowError())
+	// No checkout is created for a rejected purchase
+	assert.Equal(t, []string{actGetCatalogue, actPlanPurchase}, started.names())
 
 	require.True(t, result.accepted)
 	require.NoError(t, result.err)
@@ -215,6 +252,8 @@ func TestShoppingAgentRejection(t *testing.T) {
 	require.NotNil(t, agent.Decision)
 	assert.Equal(t, workflows.PurchaseDecisionReject, agent.Decision.Decision)
 	assert.Equal(t, reject.Note, agent.Decision.Note)
+	assert.Empty(t, agent.CheckoutID)
+	assert.Empty(t, agent.OrderID)
 
 	// The completed Workflow remains queryable
 	assert.Equal(t, workflows.ShoppingAgentStatusRejected, queryAgent(t, env).Status)
@@ -250,6 +289,7 @@ func TestShoppingAgentRejectsInvalidDecisions(t *testing.T) {
 
 func TestShoppingAgentRejectsDuplicateDecisions(t *testing.T) {
 	env := newAgentEnv(time.Second, &activities.PurchasePlan{Proposal: kettleAndMugs}, nil)
+	mockPurchase(env, 10*time.Minute)
 
 	var first, again, reversed *decisionResult
 	env.RegisterDelayedCallback(func() {
@@ -261,22 +301,26 @@ func TestShoppingAgentRejectsDuplicateDecisions(t *testing.T) {
 		reversed = decide(env, reject)
 	}, 2*time.Minute)
 
-	// The original decision stands
+	// The original decision stands while the purchase is in progress
 	env.RegisterDelayedCallback(func() {
 		require.True(t, first.accepted)
 		assertDecisionRejected(t, again)
 		assertDecisionRejected(t, reversed)
+		assert.Contains(t, again.rejected.Error(), "status is purchasing")
 
 		agent := queryAgent(t, env)
-		assert.Equal(t, workflows.ShoppingAgentStatusApproved, agent.Status)
+		assert.Equal(t, workflows.ShoppingAgentStatusPurchasing, agent.Status)
 		require.NotNil(t, agent.Decision)
 		assert.Equal(t, workflows.PurchaseDecisionApprove, agent.Decision.Decision)
-		env.CancelWorkflow()
 	}, 3*time.Minute)
 
 	env.ExecuteWorkflow(workflows.ShoppingAgentWorkflow, newAgentInput())
 
-	assertCancelled(t, env)
+	require.NoError(t, env.GetWorkflowError())
+	var agent workflows.ShoppingAgent
+	require.NoError(t, env.GetWorkflowResult(&agent))
+	assert.Equal(t, workflows.ShoppingAgentStatusPurchased, agent.Status)
+	assert.Equal(t, workflows.PurchaseDecisionApprove, agent.Decision.Decision)
 }
 
 func TestShoppingAgentCannotSatisfyRequest(t *testing.T) {
@@ -312,14 +356,28 @@ func TestShoppingAgentPlanningFailure(t *testing.T) {
 	assert.Equal(t, workflows.ShoppingAgentStatusFailed, agent.Status)
 	assert.Equal(t, "OpenAI request failed with status 401: invalid_api_key", agent.Error)
 	assert.Nil(t, agent.Proposal)
+
+	// The final state is carried by the failure, so it remains available
+	// without querying the closed Workflow
+	assert.Equal(t, agent, failureState(t, appErr))
 }
 
 func TestShoppingAgentInvalidInput(t *testing.T) {
 	tests := map[string]*workflows.ShoppingAgentInput{
 		"nil input":      nil,
 		"empty request":  {Buyer: workflows.Buyer{Email: buyerEmail}},
-		"missing email":  {Request: "Buy me a kettle under £50"},
+		"missing email":  {Request: kettleRequest},
 		"overlong input": {Request: strings.Repeat("a", 1001), Buyer: workflows.Buyer{Email: buyerEmail}},
+		"negative inventory failures": {
+			Request: kettleRequest,
+			Buyer:   workflows.Buyer{Email: buyerEmail},
+			Demo:    &workflows.ShoppingAgentDemoOptions{InventoryFailures: -1},
+		},
+		"too many inventory failures": {
+			Request: kettleRequest,
+			Buyer:   workflows.Buyer{Email: buyerEmail},
+			Demo:    &workflows.ShoppingAgentDemoOptions{InventoryFailures: 3},
+		},
 	}
 
 	for name, input := range tests {

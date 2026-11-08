@@ -23,6 +23,7 @@ import {
   CheckoutOrder,
   CheckoutPayment,
 } from './checkout.schema';
+import { IdempotentRequest, idempotencyConflict, isDuplicateKeyError } from './idempotency';
 
 // Statuses in which completion has not started, so no Order Workflow exists
 const CONFIGURABLE_STATUSES: CheckoutResponseStatus[] = ['incomplete', 'ready_for_complete'];
@@ -37,7 +38,17 @@ export class CheckoutService {
     private readonly ucp: UcpService,
   ) {}
 
-  async createCheckout(request: CheckoutCreateRequest): Promise<CheckoutResponse | ErrorResponse> {
+  async createCheckout(
+    request: CheckoutCreateRequest,
+    idempotency?: IdempotentRequest,
+  ): Promise<CheckoutResponse | ErrorResponse> {
+    if (idempotency) {
+      const original = await this.findCreatedWithKey(idempotency);
+      if (original) {
+        return this.checkoutResponse(original);
+      }
+    }
+
     if (request.line_items.length === 0) {
       return this.ucp.errorResponse([
         {
@@ -94,11 +105,45 @@ export class CheckoutService {
       currency: CATALOGUE_CURRENCY,
       lineItems,
       buyer,
+      idempotency: idempotency && {
+        createKey: idempotency.key,
+        createRequestHash: idempotency.hash,
+      },
     };
 
-    await this.checkouts.create(checkout);
+    try {
+      await this.checkouts.create(checkout);
+    } catch (err) {
+      // A concurrent request with the same key created the checkout first
+      const original =
+        idempotency && isDuplicateKeyError(err)
+          ? await this.findCreatedWithKey(idempotency)
+          : undefined;
+      if (!original) {
+        throw err;
+      }
+      return this.checkoutResponse(original);
+    }
 
     return this.checkoutResponse(checkout);
+  }
+
+  // Returns the checkout created by an earlier request with the same key. The
+  // checkout is returned in its current state. Business outcomes that created
+  // no checkout, such as an unavailable item, are not recorded, so repeating
+  // them re-evaluates the request without side effects.
+  private async findCreatedWithKey(idempotency: IdempotentRequest): Promise<Checkout | undefined> {
+    const checkout = await this.checkouts
+      .findOne({ 'idempotency.createKey': idempotency.key })
+      .lean<Checkout>()
+      .exec();
+    if (!checkout) {
+      return undefined;
+    }
+    if (checkout.idempotency?.createRequestHash !== idempotency.hash) {
+      throw idempotencyConflict();
+    }
+    return checkout;
   }
 
   async getCheckout(id: string): Promise<CheckoutResponse | ErrorResponse> {
@@ -113,7 +158,20 @@ export class CheckoutService {
   async completeCheckout(
     id: string,
     request: CheckoutCompleteRequest,
+    idempotency?: IdempotentRequest,
   ): Promise<CheckoutResponse | ErrorResponse> {
+    if (idempotency) {
+      const accepted = await this.findCompletedWithKey(id, idempotency);
+      if (accepted?.status === 'complete_in_progress') {
+        return this.placeOrder(accepted);
+      }
+      if (accepted) {
+        // The original completion succeeded: return its outcome rather than
+        // reporting that a completed checkout cannot be completed again
+        return this.checkoutResponse(accepted);
+      }
+    }
+
     const checkout = await this.checkouts.findById(id).lean<Checkout>().exec();
     if (!checkout) {
       return this.ucp.notFound('Checkout', id);
@@ -179,20 +237,61 @@ export class CheckoutService {
 
     // Conditional update guards against concurrent completion requests.
     // The checkout becomes completed once an Order has been placed for it.
-    const accepted = await this.checkouts
-      .findOneAndUpdate(
-        { _id: id, status: 'ready_for_complete' },
-        { $set: { status: 'complete_in_progress', payment } },
-        { new: true },
-      )
-      .lean<Checkout>()
-      .exec();
+    let accepted: Checkout | null;
+    try {
+      accepted = await this.checkouts
+        .findOneAndUpdate(
+          { _id: id, status: 'ready_for_complete' },
+          {
+            $set: {
+              status: 'complete_in_progress',
+              payment,
+              idempotency: idempotency
+                ? {
+                    ...checkout.idempotency,
+                    completeKey: idempotency.key,
+                    completeRequestHash: idempotency.hash,
+                  }
+                : checkout.idempotency,
+            },
+          },
+          { new: true },
+        )
+        .lean<Checkout>()
+        .exec();
+    } catch (err) {
+      // The key was used concurrently to complete another checkout
+      if (idempotency && isDuplicateKeyError(err)) {
+        throw idempotencyConflict();
+      }
+      throw err;
+    }
 
     if (!accepted) {
       return this.getCheckout(id);
     }
 
     return this.placeOrder(accepted);
+  }
+
+  // Returns the checkout whose completion was accepted for an earlier request
+  // with the same key. Rejected or incomplete attempts change no state and are
+  // not recorded, so repeating them re-evaluates the request.
+  private async findCompletedWithKey(
+    id: string,
+    idempotency: IdempotentRequest,
+  ): Promise<Checkout | undefined> {
+    const checkout = await this.checkouts
+      .findOne({ 'idempotency.completeKey': idempotency.key })
+      .lean<Checkout>()
+      .exec();
+    if (!checkout) {
+      return undefined;
+    }
+    if (checkout._id !== id || checkout.idempotency?.completeRequestHash !== idempotency.hash) {
+      throw idempotencyConflict();
+    }
+    return checkout;
   }
 
   // Demo-only: configures how many inventory reservation attempts fail for the

@@ -6,6 +6,13 @@ import {
   ReportFulfilmentExceptionSignal,
   ResolveFulfilmentExceptionRequest,
 } from '../src/temporal/order-workflow';
+import {
+  ClosedShoppingAgent,
+  DecidePurchaseRequest,
+  PurchaseDecisionRejectedError,
+  ShoppingAgent,
+  ShoppingAgentInput,
+} from '../src/temporal/shopping-agent-workflow';
 
 // In-memory stand-in for the Mongoose model, covering the queries the service uses
 export class FakeCheckoutModel {
@@ -15,12 +22,34 @@ export class FakeCheckoutModel {
   failNextUpdateTo?: string;
 
   async create(doc: Checkout) {
+    this.assertUniqueKeys(doc);
     this.docs.set(doc._id, structuredClone(doc));
     return doc;
   }
 
   findById(id: string) {
     return this.query(this.docs.get(id) ?? null);
+  }
+
+  // Supports the idempotency key lookups the service uses
+  findOne(filter: { 'idempotency.createKey'?: string; 'idempotency.completeKey'?: string }) {
+    const [[path, value]] = Object.entries(filter);
+    const field = path.replace('idempotency.', '') as keyof NonNullable<Checkout['idempotency']>;
+    const doc = [...this.docs.values()].find((d) => d.idempotency?.[field] === value);
+    return this.query(doc ?? null);
+  }
+
+  // Mirrors the unique partial indexes on the idempotency keys
+  private assertUniqueKeys(doc: Checkout) {
+    for (const field of ['createKey', 'completeKey'] as const) {
+      const key = doc.idempotency?.[field];
+      const clash = [...this.docs.values()].some(
+        (d) => d._id !== doc._id && key !== undefined && d.idempotency?.[field] === key,
+      );
+      if (clash) {
+        throw Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+      }
+    }
   }
 
   findOneAndUpdate(
@@ -43,6 +72,11 @@ export class FakeCheckoutModel {
     }
 
     const updated = { ...doc, ...structuredClone(update.$set) };
+    try {
+      this.assertUniqueKeys(updated);
+    } catch (err) {
+      return { lean: () => ({ exec: () => Promise.reject(err) }) };
+    }
     this.docs.set(updated._id, updated);
     return this.query(updated);
   }
@@ -63,6 +97,52 @@ export const EXCEPTION_RESOLVED_AT = '2026-10-28T14:00:00Z';
 // including its Update rejection messages.
 export class FakeTemporalService {
   readonly workflows = new Map<string, Order>();
+
+  // Shopping Agent state by Workflow ID. Tests advance the state to stand in
+  // for planning and purchasing in the Go Workflow.
+  readonly agents = new Map<string, ShoppingAgent | ClosedShoppingAgent>();
+
+  readonly startShoppingAgentWorkflow = vi.fn(async (id: string, input: ShoppingAgentInput) => {
+    this.agents.set(id, {
+      id,
+      status: 'planning',
+      request: input.request,
+      buyer: structuredClone(input.buyer),
+      demo: input.demo && structuredClone(input.demo),
+      createdAt: ORDER_CREATED_AT,
+    });
+  });
+
+  readonly getShoppingAgent = vi.fn(async (id: string) => {
+    const agent = this.agents.get(id);
+    return agent && structuredClone(agent);
+  });
+
+  // Mirrors the decidePurchase Update validator, including its messages
+  readonly decidePurchase = vi.fn(async (id: string, req: DecidePurchaseRequest) => {
+    const agent = this.agents.get(id);
+    if (!agent) {
+      return undefined;
+    }
+    if (!('request' in agent) || ['purchased', 'rejected', 'failed'].includes(agent.status)) {
+      throw new PurchaseDecisionRejectedError(
+        'shopping agent has finished and cannot accept a decision',
+      );
+    }
+
+    const reject = (message: string) =>
+      new PurchaseDecisionRejectedError(message, 'InvalidPurchaseDecision');
+    if (agent.status !== 'awaiting_approval') {
+      throw reject(`shopping agent is not awaiting approval: status is ${agent.status}`);
+    }
+    if (req.decision !== 'approve' && req.decision !== 'reject') {
+      throw reject('decision must be "approve" or "reject"');
+    }
+
+    agent.decision = { ...req, decidedAt: EXCEPTION_RESOLVED_AT };
+    agent.status = req.decision === 'approve' ? 'approved' : 'rejected';
+    return structuredClone(agent);
+  });
 
   readonly startOrderWorkflow = vi.fn(async (input: OrderInput) => {
     if (!this.workflows.has(input.id)) {

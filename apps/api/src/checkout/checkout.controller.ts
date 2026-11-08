@@ -1,8 +1,20 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Res } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Res,
+} from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBody,
+  ApiConflictResponse,
   ApiCreatedResponse,
+  ApiHeader,
   ApiInternalServerErrorResponse,
   ApiOkResponse,
   ApiOperation,
@@ -20,6 +32,7 @@ import { schemaRef } from '../swagger';
 import { UcpSchemaPipe } from '../ucp/ucp-schema.pipe';
 import { completeCheckoutExample, createCheckoutExample } from './checkout.examples';
 import { CheckoutService } from './checkout.service';
+import { IDEMPOTENCY_KEY_HEADER, idempotentRequest } from './idempotency';
 
 const checkoutIdParam = ApiParam({
   name: 'id',
@@ -40,6 +53,26 @@ const checkoutOrErrorResponse = (description: string) =>
     // anyOf rather than oneOf: the UCP schemas are not mutually exclusive
     schema: { anyOf: [schemaRef('CheckoutResponse'), schemaRef('ErrorResponse')] },
   });
+
+const idempotencyKeyHeader = (operation: string) =>
+  ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      `UCP idempotency key, between 1 and 255 characters. Repeating the request with the same ` +
+      `key and body ${operation}. Reusing a key with a different body returns HTTP 409. Keys ` +
+      'are stored with the checkout and are not expired. Requests without a key are not ' +
+      'deduplicated.',
+    schema: { type: 'string', maxLength: 255 },
+  });
+
+const idempotencyConflictResponse = ApiConflictResponse({
+  description:
+    'The Idempotency-Key was already used with a different request body or, for completion, ' +
+    'a different checkout. The `code` value `idempotency_key_reused` is implementation-defined: ' +
+    'UCP does not register a code for this error.',
+  schema: schemaRef('InvalidRequest'),
+});
 
 // UCP checkout capability REST binding, relative to the advertised
 // dev.ucp.shopping service endpoint
@@ -73,11 +106,17 @@ export class CheckoutController {
     schema: schemaRef('ErrorResponse'),
   })
   @invalidRequestResponse
+  @idempotencyKeyHeader(
+    'returns the checkout created by the original request, in its current state, without ' +
+      'creating another',
+  )
+  @idempotencyConflictResponse
   async createCheckout(
     @Body(new UcpSchemaPipe(CheckoutCreateRequestSchema)) body: CheckoutCreateRequest,
     @Res({ passthrough: true }) res: { status(code: number): unknown },
+    @Headers(IDEMPOTENCY_KEY_HEADER) idempotencyKey?: string,
   ) {
-    const result = await this.service.createCheckout(body);
+    const result = await this.service.createCheckout(body, idempotentRequest(idempotencyKey, body));
 
     // A business outcome where no checkout was created is returned with HTTP 200
     res.status('id' in result ? HttpStatus.CREATED : HttpStatus.OK);
@@ -122,10 +161,16 @@ export class CheckoutController {
       'when the checkout does not exist',
   )
   @invalidRequestResponse
+  @idempotencyKeyHeader(
+    'after its completion was accepted returns the checkout, resuming Order placement if it ' +
+      'is still `complete_in_progress`, without creating another Order',
+  )
+  @idempotencyConflictResponse
   completeCheckout(
     @Param('id') id: string,
     @Body(new UcpSchemaPipe(CheckoutCompleteRequestSchema)) body: CheckoutCompleteRequest,
+    @Headers(IDEMPOTENCY_KEY_HEADER) idempotencyKey?: string,
   ) {
-    return this.service.completeCheckout(id, body);
+    return this.service.completeCheckout(id, body, idempotentRequest(idempotencyKey, body));
   }
 }

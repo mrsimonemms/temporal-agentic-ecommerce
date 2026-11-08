@@ -73,6 +73,26 @@ export class CheckoutDemo {
   inventoryFailures: number;
 }
 
+// UCP Idempotency-Key values and request fingerprints, so a retried request is
+// answered with the original outcome rather than repeating the operation.
+// Never exposed through UCP.
+@Schema({ _id: false })
+export class CheckoutIdempotency {
+  // Key of the request that created the checkout
+  @Prop({ type: String })
+  createKey?: string;
+
+  @Prop({ type: String })
+  createRequestHash?: string;
+
+  // Key of the request whose completion was accepted
+  @Prop({ type: String })
+  completeKey?: string;
+
+  @Prop({ type: String })
+  completeRequestHash?: string;
+}
+
 @Schema({ collection: 'checkouts', timestamps: true })
 export class Checkout {
   @Prop({ type: String, required: true })
@@ -98,6 +118,19 @@ export class Checkout {
 
   @Prop({ type: SchemaFactory.createForClass(CheckoutDemo) })
   demo?: CheckoutDemo;
+
+  @Prop({ type: SchemaFactory.createForClass(CheckoutIdempotency) })
+  idempotency?: CheckoutIdempotency;
 }
 
 export const CheckoutSchema = SchemaFactory.createForClass(Checkout);
+
+// Each key identifies at most one checkout per operation, enforced by MongoDB
+// so concurrent retries cannot create a second checkout. Checkouts created
+// without a key are not indexed.
+for (const field of ['idempotency.createKey', 'idempotency.completeKey']) {
+  CheckoutSchema.index(
+    { [field]: 1 },
+    { unique: true, partialFilterExpression: { [field]: { $type: 'string' } } },
+  );
+}

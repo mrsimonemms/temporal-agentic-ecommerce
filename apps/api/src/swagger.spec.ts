@@ -59,6 +59,7 @@ describe('OpenAPI document', () => {
     ['/.well-known/ucp', 'get'],
     ['/health', 'get'],
     ['/orders/{id}', 'get'],
+    ['/v1/catalogue', 'get'],
     ['/v1/checkout-sessions', 'post'],
     ['/v1/checkout-sessions/{id}', 'get'],
     ['/v1/checkout-sessions/{id}/complete', 'post'],
@@ -67,6 +68,9 @@ describe('OpenAPI document', () => {
     ['/v1/demo/orders/{orderId}', 'get'],
     ['/v1/demo/orders/{orderId}/fulfilment-exception', 'post'],
     ['/v1/demo/orders/{orderId}/resolve-fulfilment-exception', 'post'],
+    ['/v1/demo/shopping-agents', 'post'],
+    ['/v1/demo/shopping-agents/{id}', 'get'],
+    ['/v1/demo/shopping-agents/{id}/decision', 'post'],
     ['/v1/orders/{id}', 'get'],
   ];
 
@@ -139,9 +143,20 @@ describe('OpenAPI document', () => {
       lines: [{ id: 'li_1', productId: 'sku_kettle', quantity: 1, unitPrice: 3499 }],
     });
 
+    // A Shopping Agent exists for the same reason
+    await temporal.startShoppingAgentWorkflow('agent_123', {
+      request: 'Buy me a kettle',
+      buyer: { email: 'jane@example.com' },
+    });
+
+    const id = path.includes('orders')
+      ? 'ord_123'
+      : path.includes('shopping-agents')
+        ? 'agent_123'
+        : 'chk_missing';
     const res = await app.inject({
       method: method.toUpperCase() as 'GET' | 'POST' | 'PUT',
-      url: path.replace(/\{\w+\}/, path.includes('orders') ? 'ord_123' : 'chk_missing'),
+      url: path.replace(/\{\w+\}/, id),
       payload: method === 'post' ? {} : undefined,
     });
 
@@ -201,7 +216,7 @@ describe('OpenAPI document', () => {
       expect.objectContaining({ name: 'id', in: 'path', required: true }),
     );
     // Completion always returns HTTP 200, never the default 201 for POST
-    expect(Object.keys(complete.responses).sort()).toEqual(['200', '400', '500']);
+    expect(Object.keys(complete.responses).sort()).toEqual(['200', '400', '409', '500']);
     expect(complete.responses['200'].content?.['application/json'].schema).toEqual({
       anyOf: [
         { $ref: '#/components/schemas/CheckoutResponse' },
@@ -217,6 +232,137 @@ describe('OpenAPI document', () => {
     expect(checkoutResponse.required).toEqual(expect.arrayContaining(['id', 'status', 'ucp']));
     expect(checkoutResponse.properties.status.enum).toEqual(
       expect.arrayContaining(['complete_in_progress', 'completed']),
+    );
+  });
+
+  it.each([
+    ['/v1/checkout-sessions', 'post'],
+    ['/v1/checkout-sessions/{id}/complete', 'post'],
+  ])('documents the optional UCP Idempotency-Key header for %s', (path, method) => {
+    const op = operation(document, path, method);
+
+    expect(op.parameters).toContainEqual(
+      expect.objectContaining({ name: 'Idempotency-Key', in: 'header', required: false }),
+    );
+    expect(op.responses['409'].content?.['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/InvalidRequest',
+    });
+  });
+
+  it('documents the catalogue as a merchant endpoint, not a UCP operation', () => {
+    const op = operation(document, '/v1/catalogue', 'get');
+
+    expect(op.tags).toEqual(['Catalogue']);
+    expect(op.description).toContain('not a UCP operation');
+    expect(op.requestBody).toBeUndefined();
+    expect(Object.keys(op.responses)).toEqual(['200']);
+    expect(op.responses['200'].content?.['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/CatalogueDto',
+    });
+    expect(
+      (op.responses['200'].content?.['application/json'] as { example?: unknown }).example,
+    ).toMatchObject({
+      currency: 'GBP',
+      products: expect.arrayContaining([
+        {
+          id: 'sku_kettle',
+          title: 'Stainless Steel Kettle',
+          description: expect.any(String),
+          unitPrice: 3499,
+        },
+      ]),
+    });
+
+    const schemas = document.components!.schemas!;
+    expect(schemas.CatalogueDto).toMatchObject({
+      required: ['currency', 'products'],
+      properties: { products: { type: 'array' } },
+    });
+    expect(schemas.CatalogueProductDto).toMatchObject({
+      required: ['id', 'title', 'description', 'unitPrice'],
+      properties: { unitPrice: { type: 'integer', minimum: 0 } },
+    });
+    expect(document.tags).toContainEqual(
+      expect.objectContaining({
+        name: 'Catalogue',
+        description: expect.stringContaining('Not a UCP'),
+      }),
+    );
+  });
+
+  it('documents the demo-only Shopping Agent endpoints', () => {
+    const start = operation(document, '/v1/demo/shopping-agents', 'post');
+    const get = operation(document, '/v1/demo/shopping-agents/{id}', 'get');
+    const decide = operation(document, '/v1/demo/shopping-agents/{id}/decision', 'post');
+
+    for (const op of [start, get, decide]) {
+      expect(op.tags).toEqual(['Demo']);
+      expect(op.summary).toContain('demo only');
+      expect(op.description).toContain('not part of UCP');
+    }
+
+    expect(start.requestBody?.content['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/StartShoppingAgentDto',
+    });
+    const examples = start.requestBody?.content['application/json'].examples ?? {};
+    expect(examples.kettleAndMugs.value).toEqual({
+      request: 'Buy me a kettle and two sets of mugs. Keep it under £100.',
+      buyer: { email: 'ada@example.com', name: 'Ada Lovelace' },
+    });
+    expect(examples.withInventoryFailures.value).toMatchObject({ demo: { inventoryFailures: 2 } });
+    expect(Object.keys(start.responses).sort()).toEqual(['201', '400', '500']);
+    expect(start.responses['201'].content?.['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/StartShoppingAgentResponseDto',
+    });
+
+    expect(Object.keys(get.responses).sort()).toEqual(['200', '404', '500']);
+    expect(get.responses['200'].content?.['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/ShoppingAgentStateDto',
+    });
+
+    expect(decide.requestBody?.content['application/json'].schema).toEqual({
+      $ref: '#/components/schemas/DecidePurchaseDto',
+    });
+    expect(Object.keys(decide.requestBody?.content['application/json'].examples ?? {})).toEqual([
+      'approve',
+      'reject',
+    ]);
+    expect(Object.keys(decide.responses).sort()).toEqual(['200', '400', '404', '409', '500']);
+    for (const op of [get, decide]) {
+      expect(op.parameters).toContainEqual(
+        expect.objectContaining({ name: 'id', in: 'path', required: true }),
+      );
+      expect(op.responses['404'].content?.['application/json'].schema).toEqual({
+        $ref: '#/components/schemas/HttpError',
+      });
+    }
+
+    const schemas = document.components!.schemas!;
+    expect(schemas.StartShoppingAgentDto).toMatchObject({
+      required: ['request', 'buyer'],
+      properties: { request: { maxLength: 1000 } },
+    });
+    expect(schemas.ShoppingAgentDemoDto).toMatchObject({
+      properties: { inventoryFailures: { type: 'integer', minimum: 0, maximum: 2 } },
+    });
+    expect(schemas.DecidePurchaseDto).toMatchObject({
+      required: ['decision'],
+      properties: { decision: { enum: ['approve', 'reject'] } },
+    });
+    const state = schemas.ShoppingAgentStateDto as {
+      properties: Record<string, { enum?: string[] }>;
+    };
+    expect(state.properties.status.enum).toEqual([
+      'planning',
+      'awaiting_approval',
+      'approved',
+      'purchasing',
+      'purchased',
+      'rejected',
+      'failed',
+    ]);
+    expect(Object.keys(state.properties)).toEqual(
+      expect.arrayContaining(['proposal', 'decision', 'checkoutId', 'orderId', 'error']),
     );
   });
 

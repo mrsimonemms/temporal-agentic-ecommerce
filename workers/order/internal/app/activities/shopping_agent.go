@@ -66,8 +66,10 @@ Rules:
   reply with one or two sentences explaining why.`
 
 // PlanPurchaseInput is the natural-language request to plan a purchase from
+// and the catalogue snapshot to select products from
 type PlanPurchaseInput struct {
-	Request string `json:"request"`
+	Request   string    `json:"request"`
+	Catalogue Catalogue `json:"catalogue"`
 }
 
 // ProposalLine is a product and quantity selected by the agent. Prices come
@@ -168,14 +170,19 @@ func arraySchema(description string, items map[string]any) map[string]any {
 }
 
 // PlanPurchase uses an OpenAI model with function calling to select products
-// from the catalogue. The model only selects products: the proposal is
-// validated and totalled here, and is never trusted as returned by the model.
-// The loop is bounded by maxModelTurns and maxToolCalls.
-func (a *Activities) PlanPurchase(ctx context.Context, input PlanPurchaseInput) (*PurchasePlan, error) {
+// from the supplied catalogue snapshot. The catalogue is not fetched here, so
+// a retried attempt repeats only the model interaction. The model only selects
+// products: the proposal is validated and totalled against the snapshot, and is
+// never trusted as returned by the model. The loop is bounded by maxModelTurns
+// and maxToolCalls.
+func (a *Activities) PlanPurchase(ctx context.Context, input *PlanPurchaseInput) (*PurchasePlan, error) {
 	logger := activity.GetLogger(ctx)
 
 	if strings.TrimSpace(input.Request) == "" {
 		return nil, temporal.NewNonRetryableApplicationError("request is required", ErrTypeInvalidPlanInput, nil)
+	}
+	if err := input.Catalogue.validate(); err != nil {
+		return nil, temporal.NewNonRetryableApplicationError("invalid catalogue", ErrTypeInvalidPlanInput, err)
 	}
 
 	params := responses.ResponseNewParams{
@@ -186,7 +193,7 @@ func (a *Activities) PlanPurchase(ctx context.Context, input PlanPurchaseInput) 
 		ParallelToolCalls: openai.Bool(false),
 		MaxOutputTokens:   openai.Int(maxOutputTokens),
 	}
-	session := &agentSession{}
+	session := &agentSession{catalogue: &input.Catalogue}
 
 	for turn := 1; turn <= maxModelTurns; turn++ {
 		res, err := a.responses.New(ctx, params)
@@ -245,14 +252,9 @@ func (a *Activities) PlanPurchase(ctx context.Context, input PlanPurchaseInput) 
 	)
 }
 
-// catalogueListing is the list_products tool output
-type catalogueListing struct {
-	Currency string    `json:"currency"`
-	Products []Product `json:"products"`
-}
-
 // agentSession holds the state of the tool calls in a single Activity attempt
 type agentSession struct {
+	catalogue       *Catalogue
 	toolCalls       int
 	catalogueListed bool
 }
@@ -263,7 +265,7 @@ func (s *agentSession) execute(call *responses.ResponseFunctionToolCall) (string
 	switch call.Name {
 	case toolListProducts:
 		s.catalogueListed = true
-		return toolResult(catalogueListing{Currency: CatalogueCurrency, Products: catalogue}), nil
+		return toolResult(s.catalogue), nil
 	case toolProposePurchase:
 		if !s.catalogueListed {
 			return toolError(errors.New("call list_products before proposing a purchase")), nil
@@ -276,7 +278,7 @@ func (s *agentSession) execute(call *responses.ResponseFunctionToolCall) (string
 			return toolError(fmt.Errorf("invalid arguments: %w", err)), nil
 		}
 
-		proposal, err := buildProposal(&args)
+		proposal, err := buildProposal(&args, s.catalogue)
 		if err != nil {
 			return toolError(err), nil
 		}
@@ -286,12 +288,13 @@ func (s *agentSession) execute(call *responses.ResponseFunctionToolCall) (string
 	}
 }
 
-// buildProposal validates the model's selection against the catalogue and
-// calculates the total in minor units
-func buildProposal(args *proposePurchaseArgs) (*PurchaseProposal, error) {
+// buildProposal validates the model's selection against the catalogue
+// snapshot and calculates the total in minor units. The proposal keeps the
+// titles and prices from the snapshot, which are what the human approves.
+func buildProposal(args *proposePurchaseArgs, catalogue *Catalogue) (*PurchaseProposal, error) {
 	var errs []error
-	if args.Currency != CatalogueCurrency {
-		errs = append(errs, fmt.Errorf("currency %q is not supported: the catalogue is priced in %s", args.Currency, CatalogueCurrency))
+	if args.Currency != catalogue.Currency {
+		errs = append(errs, fmt.Errorf("currency %q is not supported: the catalogue is priced in %s", args.Currency, catalogue.Currency))
 	}
 	if args.Budget <= 0 {
 		errs = append(errs, errors.New("budget must be a positive amount in minor units"))
@@ -300,10 +303,10 @@ func buildProposal(args *proposePurchaseArgs) (*PurchaseProposal, error) {
 		errs = append(errs, errors.New("at least one line is required"))
 	}
 
-	proposal := &PurchaseProposal{Currency: CatalogueCurrency, Budget: args.Budget}
+	proposal := &PurchaseProposal{Currency: catalogue.Currency, Budget: args.Budget}
 	seen := map[string]bool{}
 	for k, l := range args.Lines {
-		product, ok := findProduct(l.ProductID)
+		product, ok := catalogue.find(l.ProductID)
 		if !ok {
 			errs = append(errs, fmt.Errorf("line %d: product %q is not in the catalogue", k, l.ProductID))
 			continue

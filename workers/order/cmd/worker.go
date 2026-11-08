@@ -15,12 +15,34 @@ import (
 	"go.temporal.io/sdk/worker"
 )
 
+// validateWorkerConfig rejects missing or unusable configuration. Messages
+// name the setting but never include its value.
+func validateWorkerConfig(openAIKey, openAIModel, commerceAPIURL string) error {
+	if _, err := activities.ParseCommerceURL(commerceAPIURL); err != nil {
+		return gh.FatalError{
+			Msg: "Commerce API URL must be an absolute http or https URL: set COMMERCE_API_URL or --commerce-api-url",
+		}
+	}
+	if strings.TrimSpace(openAIKey) == "" {
+		return gh.FatalError{
+			Msg: "OpenAI API key is required: set OPENAI_API_KEY or --openai-api-key",
+		}
+	}
+	if strings.TrimSpace(openAIModel) == "" {
+		return gh.FatalError{
+			Msg: "OpenAI model cannot be empty: set OPENAI_MODEL or --openai-model",
+		}
+	}
+	return nil
+}
+
 func newWorkerCmd() *cobra.Command {
 	opts := struct {
 		temporal *temporal.TemporalOpts
 
-		OpenAPIKey  string
-		OpenAIModel string
+		OpenAPIKey     string
+		OpenAIModel    string
+		CommerceAPIURL string
 	}{
 		temporal: &temporal.TemporalOpts{},
 	}
@@ -29,17 +51,7 @@ func newWorkerCmd() *cobra.Command {
 		Use:   "worker",
 		Short: "Run the Temporal worker",
 		PreRunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(opts.OpenAPIKey) == "" {
-				return gh.FatalError{
-					Msg: "OpenAI API key is required: set OPENAI_API_KEY or --openai-api-key",
-				}
-			}
-			if strings.TrimSpace(opts.OpenAIModel) == "" {
-				return gh.FatalError{
-					Msg: "OpenAI model cannot be empty: set OPENAI_MODEL or --openai-model",
-				}
-			}
-			return nil
+			return validateWorkerConfig(opts.OpenAPIKey, opts.OpenAIModel, opts.CommerceAPIURL)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := temporal.NewConnection(temporal.ParseCobraOpts(
@@ -67,7 +79,7 @@ func newWorkerCmd() *cobra.Command {
 			w.RegisterWorkflow(workflows.OrderWorkflow)
 			w.RegisterWorkflow(workflows.ShoppingAgentWorkflow)
 
-			acts, err := activities.NewActivities(opts.OpenAPIKey, opts.OpenAIModel)
+			acts, err := activities.NewActivities(opts.OpenAPIKey, opts.OpenAIModel, opts.CommerceAPIURL)
 			if err != nil {
 				return gh.FatalError{
 					Cause: err,
@@ -98,6 +110,12 @@ func newWorkerCmd() *cobra.Command {
 	}
 
 	temporal.NewCobraOpts(cmd, opts.temporal)
+
+	viper.SetDefault("commerce_api_url", activities.DefaultCommerceAPIURL)
+	cmd.Flags().StringVar(
+		&opts.CommerceAPIURL, "commerce-api-url",
+		viper.GetString("commerce_api_url"), "Base URL of the commerce API's versioned routes, used for checkout",
+	)
 
 	cmd.Flags().StringVar(
 		&opts.OpenAPIKey, "openai-api-key",

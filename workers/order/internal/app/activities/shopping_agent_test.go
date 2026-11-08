@@ -121,19 +121,39 @@ func newAgent(t *testing.T, fake *fakeOpenAI) (acts *activities.Activities, apiK
 	apiKey = "sk-test-" + rand.Text()
 	fake.apiKey = apiKey
 
-	acts, err := activities.NewActivities(apiKey, activities.DefaultOpenAIModel)
+	acts, err := activities.NewActivities(apiKey, activities.DefaultOpenAIModel, activities.DefaultCommerceAPIURL)
 	require.NoError(t, err)
 	return acts, apiKey
 }
 
+// kitchenCatalogue is a catalogue snapshot as returned by GetCatalogue. The
+// worker holds no catalogue of its own: tests supply it, as the Workflow does.
+func kitchenCatalogue() activities.Catalogue {
+	return activities.Catalogue{
+		Currency: gbp,
+		Products: []activities.Product{
+			{ID: kettleSKU, Title: kettleTitle, Description: "1.7 litre cordless electric kettle", UnitPrice: 3499},
+			{ID: "sku_toaster", Title: "Four-Slice Toaster", Description: "Four-slot electric toaster", UnitPrice: 4999},
+			{ID: mugSetSKU, Title: "Stoneware Mug Set (4 pack)", Description: "One set of four stoneware mugs", UnitPrice: 2400},
+		},
+	}
+}
+
 func planPurchase(t *testing.T, acts *activities.Activities, request string) (*activities.PurchasePlan, error) {
+	t.Helper()
+	return planPurchaseFrom(t, acts, request, kitchenCatalogue())
+}
+
+func planPurchaseFrom(
+	t *testing.T, acts *activities.Activities, request string, catalogue activities.Catalogue,
+) (*activities.PurchasePlan, error) {
 	t.Helper()
 
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestActivityEnvironment()
 	env.RegisterActivity(acts)
 
-	res, err := env.ExecuteActivity(acts.PlanPurchase, activities.PlanPurchaseInput{Request: request})
+	res, err := env.ExecuteActivity(acts.PlanPurchase, &activities.PlanPurchaseInput{Request: request, Catalogue: catalogue})
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +258,7 @@ func TestPlanPurchaseProposesValidatedPurchase(t *testing.T) {
 	assert.Empty(t, plan.Explanation)
 	assert.Equal(t, &activities.PurchaseProposal{
 		Lines: []activities.ProposalLine{
-			{ProductID: "sku_kettle", Title: "Stainless Steel Kettle", Quantity: 1, UnitPrice: 3499, Total: 3499},
+			{ProductID: kettleSKU, Title: kettleTitle, Quantity: 1, UnitPrice: 3499, Total: 3499},
 			{ProductID: "sku_mug_set", Title: "Stoneware Mug Set (4 pack)", Quantity: 2, UnitPrice: 2400, Total: 4800},
 		},
 		Currency: "GBP",
@@ -272,23 +292,84 @@ func TestPlanPurchaseProposesValidatedPurchase(t *testing.T) {
 	callID, output := functionOutput(t, &second)
 	assert.Equal(t, "call_list_resp_1", callID)
 
-	var listed struct {
-		Currency string               `json:"currency"`
-		Products []activities.Product `json:"products"`
-	}
+	// list_products returns exactly the supplied snapshot
+	var listed activities.Catalogue
 	require.NoError(t, json.Unmarshal([]byte(output), &listed))
-	assert.Equal(t, "GBP", listed.Currency)
-	require.Len(t, listed.Products, 3)
-	assert.Equal(t, activities.Product{
-		ID: "sku_kettle", Title: "Stainless Steel Kettle", Description: "1.7 litre cordless electric kettle", UnitPrice: 3499,
-	}, listed.Products[0])
+	assert.Equal(t, kitchenCatalogue(), listed)
+}
+
+func TestPlanPurchaseValidatesAgainstTheSuppliedCatalogue(t *testing.T) {
+	// A different catalogue: the kettle costs more, the mug set is not sold
+	// and a teapot is. Nothing is priced from data held by the worker.
+	catalogue := activities.Catalogue{
+		Currency: "EUR",
+		Products: []activities.Product{
+			{ID: kettleSKU, Title: "Copper Kettle", UnitPrice: 5999},
+			{ID: "sku_teapot", Title: "Cast Iron Teapot", UnitPrice: 2750},
+		},
+	}
+	fake := &fakeOpenAI{replies: []reply{
+		listProducts("resp_1"),
+		// Valid for the kitchen catalogue, but not for this one
+		proposePurchase("resp_2", validProposal),
+		proposePurchase("resp_3", `{"lines":[{"productId":"sku_kettle","quantity":1},{"productId":"sku_teapot","quantity":2}],`+
+			`"currency":"EUR","budget":12000}`),
+	}}
+	acts, _ := newAgent(t, fake)
+
+	plan, err := planPurchaseFrom(t, acts, "Buy me a kettle and two teapots for under €120", catalogue)
+	require.NoError(t, err)
+
+	requests := fake.recorded()
+	require.Len(t, requests, 3)
+	_, listing := functionOutput(t, &requests[1])
+	var listed activities.Catalogue
+	require.NoError(t, json.Unmarshal([]byte(listing), &listed))
+	assert.Equal(t, catalogue, listed)
+
+	_, rejection := functionOutput(t, &requests[2])
+	assert.Contains(t, rejection, `currency \"GBP\" is not supported: the catalogue is priced in EUR`)
+	assert.Contains(t, rejection, `product \"sku_mug_set\" is not in the catalogue`)
+
+	assert.Equal(t, &activities.PurchaseProposal{
+		Lines: []activities.ProposalLine{
+			{ProductID: kettleSKU, Title: "Copper Kettle", Quantity: 1, UnitPrice: 5999, Total: 5999},
+			{ProductID: "sku_teapot", Title: "Cast Iron Teapot", Quantity: 2, UnitPrice: 2750, Total: 5500},
+		},
+		Currency: "EUR",
+		Total:    11499,
+		Budget:   12000,
+	}, plan.Proposal)
+}
+
+func TestPlanPurchaseRejectsAnInvalidCatalogue(t *testing.T) {
+	tests := map[string]activities.Catalogue{
+		"empty":             {Currency: gbp},
+		"missing currency":  {Products: kitchenCatalogue().Products},
+		"duplicate product": {Currency: gbp, Products: append(kitchenCatalogue().Products, kitchenCatalogue().Products[0])},
+		"negative price": {Currency: gbp, Products: []activities.Product{
+			{ID: kettleSKU, Title: kettleTitle, UnitPrice: -1},
+		}},
+	}
+
+	for name, catalogue := range tests {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeOpenAI{}
+			acts, _ := newAgent(t, fake)
+
+			_, err := planPurchaseFrom(t, acts, shoppingRequest, catalogue)
+			assertAppError(t, err, activities.ErrTypeInvalidPlanInput, true)
+			// No model tokens are spent on an unusable catalogue
+			assert.Empty(t, fake.recorded())
+		})
+	}
 }
 
 func TestPlanPurchaseUsesInjectedModel(t *testing.T) {
 	fake := &fakeOpenAI{replies: []reply{listProducts("resp_1"), proposePurchase("resp_2", validProposal)}}
 	startFake(t, fake)
 
-	acts, err := activities.NewActivities("sk-test-model", "gpt-test-model")
+	acts, err := activities.NewActivities("sk-test-model", "gpt-test-model", activities.DefaultCommerceAPIURL)
 	require.NoError(t, err)
 
 	_, err = planPurchase(t, acts, shoppingRequest)

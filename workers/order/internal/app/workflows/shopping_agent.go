@@ -3,6 +3,7 @@ package workflows
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -22,8 +23,11 @@ const (
 	errTypeInvalidShoppingAgentInput = "InvalidShoppingAgentInput"
 	errTypeInvalidPurchaseDecision   = "InvalidPurchaseDecision"
 	errTypePlanningFailed            = "PurchasePlanningFailed"
+	errTypePurchaseFailed            = "PurchaseFailed"
 
 	maxShoppingRequestLength = 1000
+	// The demo simulates at most two inventory reservation failures
+	maxInventoryFailures = 2
 )
 
 // ShoppingAgentStatus is the lifecycle status of the Shopping Agent
@@ -33,6 +37,8 @@ const (
 	ShoppingAgentStatusPlanning         ShoppingAgentStatus = "planning"
 	ShoppingAgentStatusAwaitingApproval ShoppingAgentStatus = "awaiting_approval"
 	ShoppingAgentStatusApproved         ShoppingAgentStatus = "approved"
+	ShoppingAgentStatusPurchasing       ShoppingAgentStatus = "purchasing"
+	ShoppingAgentStatusPurchased        ShoppingAgentStatus = "purchased"
 	ShoppingAgentStatusRejected         ShoppingAgentStatus = "rejected"
 	ShoppingAgentStatusFailed           ShoppingAgentStatus = "failed"
 )
@@ -57,12 +63,35 @@ var planPurchaseActivityOptions = workflow.ActivityOptions{
 	},
 }
 
+// commerceActivityOptions apply to the catalogue and checkout Activities. They
+// retry transient commerce API failures quickly enough to be visible in a live
+// demonstration. Attempts are unlimited: the agent waits for the commerce API
+// to recover rather than failing. Rejections and invalid responses are
+// non-retryable and fail immediately. Each operation is a separate Activity,
+// so only the failed operation is retried.
+var commerceActivityOptions = workflow.ActivityOptions{
+	StartToCloseTimeout: 30 * time.Second,
+	RetryPolicy: &temporal.RetryPolicy{
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2,
+		MaximumInterval:    10 * time.Second,
+	},
+}
+
+// ShoppingAgentDemoOptions are demo-only controls for the Order the purchase
+// places. They are not part of the purchase proposal or the checkout.
+type ShoppingAgentDemoOptions struct {
+	// Number of inventory reservation attempts that fail before succeeding
+	InventoryFailures int32 `json:"inventoryFailures,omitempty"`
+}
+
 // ShoppingAgentInput is the command to start a Shopping Agent
 type ShoppingAgentInput struct {
 	// Natural-language shopping request, eg "Buy me a kettle. Keep it under £50."
 	Request string `json:"request"`
-	// Who the purchase is for, used for the eventual checkout
-	Buyer Buyer `json:"buyer"`
+	// Who the purchase is for, used for the checkout
+	Buyer Buyer                     `json:"buyer"`
+	Demo  *ShoppingAgentDemoOptions `json:"demo,omitempty"`
 }
 
 // DecidePurchaseRequest is the payload of the UpdateDecidePurchase Update
@@ -91,9 +120,14 @@ type ShoppingAgent struct {
 	Decision *PurchaseDecisionRecord      `json:"decision,omitempty"`
 	// Why the agent could not satisfy the request
 	Explanation string `json:"explanation,omitempty"`
-	// Why planning failed
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	// Set once the checkout is created and completed
+	CheckoutID        string `json:"checkoutId,omitempty"`
+	OrderID           string `json:"orderId,omitempty"`
+	OrderPermalinkURL string `json:"orderPermalinkUrl,omitempty"`
+	// Why planning or purchasing failed
+	Error     string                    `json:"error,omitempty"`
+	Demo      *ShoppingAgentDemoOptions `json:"demo,omitempty"`
+	CreatedAt time.Time                 `json:"createdAt"`
 }
 
 func (i *ShoppingAgentInput) validate() error {
@@ -106,6 +140,9 @@ func (i *ShoppingAgentInput) validate() error {
 	}
 	if i.Buyer.Email == "" {
 		errs = append(errs, errors.New("buyer email is required"))
+	}
+	if i.Demo != nil && (i.Demo.InventoryFailures < 0 || i.Demo.InventoryFailures > maxInventoryFailures) {
+		errs = append(errs, fmt.Errorf("demo inventoryFailures must be between 0 and %d", maxInventoryFailures))
 	}
 	return errors.Join(errs...)
 }
@@ -140,21 +177,105 @@ func (s *ShoppingAgent) decide(req DecidePurchaseRequest, now time.Time) {
 	}
 }
 
-func planPurchase(ctx workflow.Context, request string) (*activities.PurchasePlan, error) {
+// getCatalogue retrieves the catalogue from the commerce API. Its result is
+// recorded in the history, so a retried or replayed planning step reuses the
+// same snapshot rather than fetching it again.
+func getCatalogue(ctx workflow.Context) (*activities.Catalogue, error) {
+	var a *activities.Activities
+	var catalogue activities.Catalogue
+	err := workflow.ExecuteActivity(
+		workflow.WithActivityOptions(ctx, commerceActivityOptions),
+		a.GetCatalogue,
+	).Get(ctx, &catalogue)
+	return &catalogue, err
+}
+
+func planPurchase(ctx workflow.Context, request string, catalogue *activities.Catalogue) (*activities.PurchasePlan, error) {
 	var a *activities.Activities
 	var plan activities.PurchasePlan
 	err := workflow.ExecuteActivity(
 		workflow.WithActivityOptions(ctx, planPurchaseActivityOptions),
 		a.PlanPurchase,
-		activities.PlanPurchaseInput{Request: request},
+		&activities.PlanPurchaseInput{Request: request, Catalogue: *catalogue},
 	).Get(ctx, &plan)
 	return &plan, err
 }
 
+// checkoutBuyer maps the buyer onto the checkout. The name is split at the
+// first space, which the commerce API joins again for the Order.
+func checkoutBuyer(b Buyer) activities.CheckoutBuyer {
+	first, last, _ := strings.Cut(strings.TrimSpace(b.Name), " ")
+	return activities.CheckoutBuyer{Email: b.Email, FirstName: first, LastName: strings.TrimSpace(last)}
+}
+
+// purchase buys the approved proposal through the commerce API's UCP checkout.
+// Each step is a separate Activity, so a failure retries only that step and
+// never repeats the AI planning. Idempotency keys are derived from the
+// Workflow ID so a retried request cannot create a second checkout or Order.
+// The commerce API starts the independent Order Workflow when the checkout
+// completes: the Shopping Agent never starts it directly.
+func purchase(ctx workflow.Context, agent *ShoppingAgent) error {
+	ctx = workflow.WithActivityOptions(ctx, commerceActivityOptions)
+	var a *activities.Activities
+
+	lines := make([]activities.CheckoutLine, len(agent.Proposal.Lines))
+	for k, l := range agent.Proposal.Lines {
+		lines[k] = activities.CheckoutLine{ProductID: l.ProductID, Quantity: l.Quantity}
+	}
+
+	var checkout activities.CreatedCheckout
+	if err := workflow.ExecuteActivity(ctx, a.CreateCheckout, &activities.CreateCheckoutInput{
+		IdempotencyKey: agent.ID + ":create-checkout",
+		Buyer:          checkoutBuyer(agent.Buyer),
+		Lines:          lines,
+		Currency:       agent.Proposal.Currency,
+		ExpectedTotal:  agent.Proposal.Total,
+	}).Get(ctx, &checkout); err != nil {
+		return fmt.Errorf("error creating checkout: %w", err)
+	}
+	agent.CheckoutID = checkout.ID
+
+	// Configured before completion, because completion starts the Order
+	if agent.Demo != nil && agent.Demo.InventoryFailures > 0 {
+		if err := workflow.ExecuteActivity(ctx, a.ConfigureInventoryFailures, activities.ConfigureInventoryFailuresInput{
+			CheckoutID: checkout.ID,
+			Failures:   agent.Demo.InventoryFailures,
+		}).Get(ctx, nil); err != nil {
+			return fmt.Errorf("error configuring inventory failures: %w", err)
+		}
+	}
+
+	var completed activities.CompletedCheckout
+	if err := workflow.ExecuteActivity(ctx, a.CompleteCheckout, activities.CompleteCheckoutInput{
+		IdempotencyKey:   agent.ID + ":complete-checkout",
+		CheckoutID:       checkout.ID,
+		PaymentHandlerID: checkout.PaymentHandlerID,
+		InstrumentID:     "pi_" + agent.ID,
+	}).Get(ctx, &completed); err != nil {
+		return fmt.Errorf("error completing checkout: %w", err)
+	}
+	agent.OrderID = completed.OrderID
+	agent.OrderPermalinkURL = completed.OrderPermalinkURL
+	return nil
+}
+
+// fail records a failure and returns it with the final state as its details,
+// so the state remains available from the Workflow's failure once it closes
+func (s *ShoppingAgent) fail(msg, errType string, err error) error {
+	s.Status = ShoppingAgentStatusFailed
+	s.Error = msg
+	if appErr, ok := errors.AsType[*temporal.ApplicationError](err); ok {
+		s.Error = appErr.Message()
+	}
+	return temporal.NewNonRetryableApplicationError(msg, errType, err, s)
+}
+
 // ShoppingAgentWorkflow plans a purchase from a natural-language request using
 // an AI agent, then waits durably for a human to approve or reject it. A
-// rejected purchase completes the Workflow. An approved purchase remains open
-// so that checkout can be added as the next step.
+// rejected purchase completes the Workflow. An approved purchase is bought
+// through the commerce API's UCP checkout and the Workflow completes with the
+// checkout and Order references. The Order then continues independently in
+// its own Workflow. The final state is the Workflow result.
 func ShoppingAgentWorkflow(ctx workflow.Context, input *ShoppingAgentInput) (*ShoppingAgent, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("Starting ShoppingAgentWorkflow")
@@ -171,6 +292,7 @@ func ShoppingAgentWorkflow(ctx workflow.Context, input *ShoppingAgentInput) (*Sh
 		Status:    ShoppingAgentStatusPlanning,
 		Request:   input.Request,
 		Buyer:     input.Buyer,
+		Demo:      input.Demo,
 		CreatedAt: workflow.Now(ctx),
 	}
 
@@ -186,21 +308,26 @@ func ShoppingAgentWorkflow(ctx workflow.Context, input *ShoppingAgentInput) (*Sh
 		func(ctx workflow.Context, req DecidePurchaseRequest) (*ShoppingAgent, error) {
 			agent.decide(req, workflow.Now(ctx))
 			logger.Info("Purchase decision recorded", "agentId", agent.ID, "decision", req.Decision)
-			return agent, nil
+			// A snapshot of the state when the decision was recorded: the
+			// Workflow continues to change the state as it purchases
+			snapshot := *agent
+			return &snapshot, nil
 		},
 		workflow.UpdateHandlerOptions{Validator: agent.validateDecision},
 	); err != nil {
 		return nil, fmt.Errorf("error registering %s update handler: %w", UpdateDecidePurchase, err)
 	}
 
-	plan, err := planPurchase(ctx, input.Request)
+	// Separate Activities, so a catalogue failure costs no model tokens and a
+	// planning retry does not fetch the catalogue again
+	catalogue, err := getCatalogue(ctx)
 	if err != nil {
-		agent.Status = ShoppingAgentStatusFailed
-		agent.Error = "unable to plan purchase"
-		if appErr, ok := errors.AsType[*temporal.ApplicationError](err); ok {
-			agent.Error = appErr.Message()
-		}
-		return nil, temporal.NewNonRetryableApplicationError("unable to plan purchase", errTypePlanningFailed, err)
+		return nil, agent.fail("unable to retrieve catalogue", errTypePlanningFailed, err)
+	}
+
+	plan, err := planPurchase(ctx, input.Request, catalogue)
+	if err != nil {
+		return nil, agent.fail("unable to plan purchase", errTypePlanningFailed, err)
 	}
 
 	if plan.Proposal == nil {
@@ -221,20 +348,26 @@ func ShoppingAgentWorkflow(ctx workflow.Context, input *ShoppingAgentInput) (*Sh
 		return nil, err
 	}
 
+	// Let the Update handler return its result before continuing
+	if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
+		return nil, err
+	}
+
 	if agent.Status == ShoppingAgentStatusRejected {
-		// Let the Update handler return its result before completing
-		if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
-			return nil, err
-		}
 		logger.Info("Purchase rejected", "agentId", agent.ID)
 		return agent, nil
 	}
 
-	// Approved: remain open, without polling, until checkout is integrated.
-	// Only cancellation ends the Workflow for now.
 	logger.Info("Purchase approved", "agentId", agent.ID)
-	ctx.Done().Receive(ctx, nil)
+	agent.Status = ShoppingAgentStatusPurchasing
+	if err := purchase(ctx, agent); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, agent.fail("unable to complete purchase", errTypePurchaseFailed, err)
+	}
 
-	logger.Info("ShoppingAgentWorkflow cancelled", "agentId", agent.ID, "status", agent.Status)
-	return nil, ctx.Err()
+	agent.Status = ShoppingAgentStatusPurchased
+	logger.Info("Purchase completed", "agentId", agent.ID, "checkoutId", agent.CheckoutID, "orderId", agent.OrderID)
+	return agent, nil
 }

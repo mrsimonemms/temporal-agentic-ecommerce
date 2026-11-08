@@ -7,6 +7,7 @@ import config from './config';
 import { DemoModule } from './demo/demo.module';
 import { HealthModule } from './health/health.module';
 import { OrderModule } from './order/order.module';
+import { ShoppingAgentModule } from './shopping-agent/shopping-agent.module';
 import { TemporalModule } from './temporal/temporal.module';
 import { UcpModule } from './ucp/ucp.module';
 
@@ -28,6 +29,7 @@ import { UcpModule } from './ucp/ucp.module';
     CheckoutModule,
     OrderModule,
     DemoModule,
+    ShoppingAgentModule,
   ],
 })
 export class AppModule {}

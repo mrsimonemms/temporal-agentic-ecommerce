@@ -451,4 +451,227 @@ describe('CheckoutController', () => {
       expect(expectError(res.json()).messages[0]).toMatchObject({ code: 'not_found' });
     });
   });
+
+  describe('Idempotency-Key', () => {
+    const order = {
+      buyer,
+      line_items: [
+        { item: { id: 'sku_kettle' }, quantity: 1 },
+        { item: { id: 'sku_mug_set' }, quantity: 2 },
+      ],
+    };
+
+    function createWithKey(key: string, payload: object = order) {
+      return app.inject({
+        method: 'POST',
+        url: '/v1/checkout-sessions',
+        headers: { 'idempotency-key': key },
+        payload,
+      });
+    }
+
+    function completeWithKey(id: string, key: string, payload: object = { payment }) {
+      return app.inject({
+        method: 'POST',
+        url: `/v1/checkout-sessions/${id}/complete`,
+        headers: { 'idempotency-key': key },
+        payload,
+      });
+    }
+
+    describe('create', () => {
+      it('returns the original checkout when the request is repeated', async () => {
+        const first = await createWithKey('agent-1:create-checkout');
+        const second = await createWithKey('agent-1:create-checkout');
+
+        expect(first.statusCode).toBe(201);
+        expect(second.statusCode).toBe(201);
+        expect(expectCheckout(second.json()).id).toBe(expectCheckout(first.json()).id);
+        expect(model.docs.size).toBe(1);
+      });
+
+      it('treats bodies with the same content in a different key order as the same request', async () => {
+        const first = await createWithKey('agent-1:create-checkout');
+        const reordered = await createWithKey('agent-1:create-checkout', {
+          line_items: order.line_items.map(({ quantity, item }) => ({ quantity, item })),
+          buyer: { last_name: 'Doe', first_name: 'Jane', email: 'jane@example.com' },
+        });
+
+        expect(reordered.json().id).toBe(first.json().id);
+        expect(model.docs.size).toBe(1);
+      });
+
+      it('creates one checkout for concurrent requests with the same key', async () => {
+        const responses = await Promise.all([
+          createWithKey('agent-1:create-checkout'),
+          createWithKey('agent-1:create-checkout'),
+          createWithKey('agent-1:create-checkout'),
+        ]);
+
+        expect(new Set(responses.map((res) => res.json().id)).size).toBe(1);
+        expect(model.docs.size).toBe(1);
+      });
+
+      it('returns the checkout in its current state', async () => {
+        const id = expectCheckout((await createWithKey('agent-1:create-checkout')).json()).id;
+        await completeCheckout(id, { payment });
+
+        const repeated = expectCheckout((await createWithKey('agent-1:create-checkout')).json());
+
+        expect(repeated.id).toBe(id);
+        expect(repeated.status).toBe('completed');
+      });
+
+      it('rejects a key reused with a different body', async () => {
+        await createWithKey('agent-1:create-checkout');
+
+        const res = await createWithKey('agent-1:create-checkout', {
+          ...order,
+          line_items: [{ item: { id: 'sku_toaster' }, quantity: 1 }],
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toEqual({
+          code: 'idempotency_key_reused',
+          content: 'The Idempotency-Key was already used with a different request',
+        });
+        expect(model.docs.size).toBe(1);
+      });
+
+      it('creates separate checkouts for different keys', async () => {
+        const first = await createWithKey('agent-1:create-checkout');
+        const second = await createWithKey('agent-2:create-checkout');
+
+        expect(second.json().id).not.toBe(first.json().id);
+        expect(model.docs.size).toBe(2);
+      });
+
+      it('does not deduplicate requests without a key', async () => {
+        const first = await createCheckout(order);
+        const second = await createCheckout(order);
+
+        expect(second.json().id).not.toBe(first.json().id);
+        expect(model.docs.size).toBe(2);
+        expect([...model.docs.values()].every((doc) => doc.idempotency === undefined)).toBe(true);
+      });
+
+      it('does not record business outcomes that create no checkout', async () => {
+        const unavailable = { buyer, line_items: [{ item: { id: 'sku_teapot' }, quantity: 1 }] };
+
+        const first = await createWithKey('agent-1:create-checkout', unavailable);
+        const second = await createWithKey('agent-1:create-checkout', unavailable);
+
+        expect(expectError(first.json()).messages[0]).toMatchObject({ code: 'item_unavailable' });
+        expect(expectError(second.json()).messages[0]).toMatchObject({ code: 'item_unavailable' });
+        expect(model.docs.size).toBe(0);
+      });
+
+      it('does not expose the key through UCP', async () => {
+        const res = await createWithKey('agent-1:create-checkout');
+
+        expect(JSON.stringify(res.json())).not.toContain('agent-1');
+        expect(res.json()).not.toHaveProperty('idempotency');
+      });
+
+      it.each([
+        ['empty', ''],
+        ['too long', 'k'.repeat(256)],
+      ])('rejects an %s key', async (_, key) => {
+        const res = await createWithKey(key);
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ code: 'invalid_request' });
+        expect(model.docs.size).toBe(0);
+      });
+    });
+
+    describe('complete', () => {
+      async function readyCheckout(key = 'agent-1:create-checkout') {
+        return expectCheckout((await createWithKey(key)).json()).id;
+      }
+
+      it('returns the completed checkout when the request is repeated', async () => {
+        const id = await readyCheckout();
+        const first = expectCheckout((await completeWithKey(id, 'agent-1:complete')).json());
+
+        const res = await completeWithKey(id, 'agent-1:complete');
+
+        expect(res.statusCode).toBe(200);
+        const repeated = expectCheckout(res.json());
+        expect(repeated.status).toBe('completed');
+        expect(repeated.order).toEqual(first.order);
+        // The original outcome, not operation_not_allowed
+        expect(repeated.messages).toBeUndefined();
+        expect(temporal.startOrderWorkflow).toHaveBeenCalledOnce();
+        expect(temporal.workflows.size).toBe(1);
+      });
+
+      it('resumes Order placement when the original attempt did not record the Order', async () => {
+        const id = await readyCheckout();
+        temporal.startOrderWorkflow.mockRejectedValueOnce(new Error('Temporal unavailable'));
+
+        const failed = expectCheckout((await completeWithKey(id, 'agent-1:complete')).json());
+        expect(failed.status).toBe('complete_in_progress');
+
+        const retried = expectCheckout((await completeWithKey(id, 'agent-1:complete')).json());
+
+        expect(retried.status).toBe('completed');
+        expect(retried.order?.id).toBe(`ord_${id.replace(/^chk_/, '')}`);
+        expect(temporal.workflows.size).toBe(1);
+      });
+
+      it('rejects a key reused with a different body', async () => {
+        const id = await readyCheckout();
+        await completeWithKey(id, 'agent-1:complete');
+
+        const res = await completeWithKey(id, 'agent-1:complete', {
+          payment: { instruments: [{ ...payment.instruments[0], id: 'pi_other' }] },
+        });
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ code: 'idempotency_key_reused' });
+        expect(temporal.startOrderWorkflow).toHaveBeenCalledOnce();
+      });
+
+      it('rejects a key reused to complete another checkout', async () => {
+        const first = await readyCheckout('agent-1:create-checkout');
+        const second = await readyCheckout('agent-2:create-checkout');
+        await completeWithKey(first, 'agent-1:complete');
+
+        const res = await completeWithKey(second, 'agent-1:complete');
+
+        expect(res.statusCode).toBe(409);
+        expect(model.docs.get(second)?.status).toBe('ready_for_complete');
+        expect(temporal.workflows.size).toBe(1);
+      });
+
+      it('does not record attempts that were not accepted', async () => {
+        const id = await readyCheckout();
+        const unsupported = {
+          payment: { instruments: [{ ...payment.instruments[0], handler_id: 'unknown' }] },
+        };
+
+        const rejected = expectCheckout(
+          (await completeWithKey(id, 'agent-1:complete', unsupported)).json(),
+        );
+        expect(rejected.messages?.[0]).toMatchObject({ code: 'payment_failed' });
+        expect(model.docs.get(id)?.idempotency?.completeKey).toBeUndefined();
+
+        // The key was not consumed, so a corrected request is a new attempt
+        const res = await completeWithKey(id, 'agent-1:complete-2');
+        expect(expectCheckout(res.json()).status).toBe('completed');
+      });
+
+      it('keeps the existing behaviour when completing again without a key', async () => {
+        const id = await readyCheckout();
+        await completeWithKey(id, 'agent-1:complete');
+
+        const res = expectCheckout((await completeCheckout(id, { payment })).json());
+
+        expect(res.status).toBe('completed');
+        expect(res.messages?.[0]).toMatchObject({ code: 'operation_not_allowed' });
+        expect(temporal.startOrderWorkflow).toHaveBeenCalledOnce();
+      });
+    });
+  });
 });
