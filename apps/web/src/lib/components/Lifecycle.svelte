@@ -7,6 +7,9 @@
 
   type StepState = 'done' | 'active' | 'skipped' | 'pending';
 
+  // The first steps belong to the UCP checkout, the remainder to the Order
+  const CHECKOUT_STEPS = 2;
+
   // Each milestone is only shown as reached once the API has reported it.
   // The exception path is optional, so it is marked as skipped when a later
   // milestone is reached without it.
@@ -49,52 +52,85 @@
   });
 </script>
 
+{#snippet stage(step: (typeof steps)[number], number: number)}
+  <li class={step.state} aria-current={step.state === 'active' ? 'step' : undefined}>
+    <span class="marker" aria-hidden="true">{step.state === 'done' ? '✓' : number}</span>
+    <span class="text">
+      <span class="label">{step.label}</span>
+      <span class="detail">{step.state === 'skipped' ? 'Not needed' : step.detail}</span>
+    </span>
+  </li>
+{/snippet}
+
 <nav class="lifecycle" aria-label="Commerce lifecycle">
-  <div class="group checkout">
-    <span class="eyebrow">Checkout · UCP</span>
+  <div class="stages">
+    <div class="group checkout">
+      <div class="heading"><span class="eyebrow">Checkout · UCP</span></div>
+      <ol>
+        {#each steps.slice(0, CHECKOUT_STEPS) as step, index (index)}
+          {@render stage(step, index + 1)}
+        {/each}
+      </ol>
+    </div>
+    <div class="group order">
+      <div class="heading">
+        <span class="eyebrow">Order · durable Temporal Workflow, continues independently</span>
+      </div>
+      <ol start={CHECKOUT_STEPS + 1}>
+        {#each steps.slice(CHECKOUT_STEPS) as step, index (index)}
+          {@render stage(step, CHECKOUT_STEPS + index + 1)}
+        {/each}
+      </ol>
+    </div>
   </div>
-  <div class="group order">
-    <span class="eyebrow">Order · durable Temporal Workflow, continues independently</span>
-  </div>
-  <ol>
-    {#each steps as step, index (index)}
-      <li class={step.state} aria-current={step.state === 'active' ? 'step' : undefined}>
-        <span class="marker" aria-hidden="true">{step.state === 'done' ? '✓' : index + 1}</span>
-        <span class="text">
-          <span class="label">{step.label}</span>
-          <span class="detail">{step.state === 'skipped' ? 'Not needed' : step.detail}</span>
-        </span>
-      </li>
-    {/each}
-  </ol>
 </nav>
 
 <style>
+  /*
+   * The panel is a size container so the layout responds to the width actually
+   * available to the stages (its content box, excluding padding) rather than to
+   * the viewport, which also has to accommodate the dashboard's own padding.
+   */
   .lifecycle {
-    display: grid;
-    grid-template-columns: 2fr 7fr;
-    column-gap: 0.75rem;
-    row-gap: 0.6rem;
+    container: lifecycle / inline-size;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 0.75rem 1.5rem 1rem;
   }
 
+  .stages {
+    display: grid;
+    grid-template-columns: 2fr 7fr;
+    column-gap: 0.75rem;
+    row-gap: 0.6rem;
+  }
+
+  /* When horizontal, the groups' headings and lists share the outer grid */
   .group {
+    display: contents;
+  }
+
+  .heading {
+    grid-row: 1;
     padding-bottom: 0.4rem;
     border-bottom: 2px solid var(--border);
   }
 
-  .group.order {
+  .order .heading {
     border-bottom-color: var(--accent);
   }
 
-  .group.order .eyebrow {
+  .order .eyebrow {
     color: var(--accent);
   }
 
+  /*
+   * Both lists span the full row with the same nine columns, so the stages
+   * line up as one sequence with the Order stages starting in column three
+   */
   ol {
+    grid-row: 2;
     grid-column: 1 / -1;
     display: grid;
     grid-template-columns: repeat(9, minmax(0, 1fr));
@@ -102,6 +138,10 @@
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+
+  .order li:first-child {
+    grid-column: 3;
   }
 
   li {
@@ -171,5 +211,70 @@
 
   li.skipped .marker {
     border-style: dashed;
+  }
+
+  /* Phones need less padding so the stacked stages keep as much width as possible */
+  @media (max-width: 768px) {
+    .lifecycle {
+      padding: 1rem;
+    }
+  }
+
+  /*
+   * Below the wide single row, the layout steps down by the panel's content
+   * width, keeping every stage column at least as wide as in the single row
+   * (about 9.5rem) so the longest words never run into the next stage:
+   *
+   * - 92rem and wider: one row of nine stages
+   * - 72rem to 92rem: each group on its own row, seven columns
+   * - 41rem to 72rem: each group on its own row, four columns
+   * - narrower: each group stacks vertically
+   *
+   * Every size in the component is in rem, so these hold at any root font size.
+   * The Order group's seven stages split evenly across seven or four columns,
+   * and the checkout group shares the same columns so the stages line up.
+   */
+  @container lifecycle (width < 92rem) {
+    .stages {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 1.25rem;
+    }
+
+    .group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    ol {
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 1rem 0.75rem;
+      padding-left: 0.25rem;
+    }
+
+    .order li:first-child {
+      grid-column: auto;
+    }
+
+    li {
+      align-items: flex-start;
+    }
+
+    .text {
+      padding-top: 0.15rem;
+    }
+  }
+
+  @container lifecycle (width < 72rem) {
+    ol {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  @container lifecycle (width < 41rem) {
+    ol {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 0.6rem;
+    }
   }
 </style>

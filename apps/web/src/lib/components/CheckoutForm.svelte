@@ -109,6 +109,8 @@
     border: none;
     margin: 0;
     padding: 0;
+    /* Browsers default fieldsets to min-content, preventing them shrinking to the panel */
+    min-inline-size: 0;
   }
 
   legend {
@@ -183,7 +185,8 @@
 
   .buyer {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    /* A bare 1fr track cannot shrink below the inputs' intrinsic width */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.75rem;
   }
 
