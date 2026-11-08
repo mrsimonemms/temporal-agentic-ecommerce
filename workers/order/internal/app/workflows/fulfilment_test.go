@@ -130,18 +130,23 @@ func TestResolveFulfilmentExceptionWithAlternativeSource(t *testing.T) {
 		env.SignalWorkflow(workflows.SignalMarkFulfilled, workflows.MarkFulfilledSignal{})
 	}, 4*time.Minute)
 
-	env.RegisterDelayedCallback(func() {
-		order := queryOrder(t, env)
-		assert.Equal(t, workflows.OrderStatusFulfilled, order.Status)
-		assert.Len(t, order.Fulfilment.Resolutions, 1)
-		assert.False(t, env.IsWorkflowCompleted())
-
-		env.CancelWorkflow()
-	}, 5*time.Minute)
-
 	env.ExecuteWorkflow(workflows.OrderWorkflow, input)
 
-	assertCancelled(t, env)
+	// Fulfilment completes the Workflow, and the result keeps the revised plan
+	// and the decision history
+	order := completedOrder(t, env)
+	assert.Equal(t, workflows.OrderStatusFulfilled, order.Status)
+	require.NotNil(t, order.FulfilledAt)
+	assert.Equal(t, "res_order-123", order.InventoryReservationID)
+	assert.Nil(t, order.Fulfilment.Exception)
+	assert.Equal(t,
+		[]workflows.FulfilmentSource{{LineID: mugLineID, Source: alternativeSource.AlternativeSource}},
+		order.Fulfilment.Sources,
+	)
+	require.Len(t, order.Fulfilment.Resolutions, 1)
+	assert.Equal(t, alternativeSource.AlternativeSource, order.Fulfilment.Resolutions[0].AlternativeSource)
+	assert.Equal(t, alternativeSource.ApprovedBy, order.Fulfilment.Resolutions[0].ApprovedBy)
+	assert.Equal(t, supplierException.Reason, order.Fulfilment.Resolutions[0].Reason)
 }
 
 func TestResolveFulfilmentExceptionRejectsInvalidResolutions(t *testing.T) {
@@ -229,6 +234,8 @@ func TestFulfilmentBlockedWhileAwaitingIntervention(t *testing.T) {
 		assert.Equal(t, workflows.OrderStatusAwaitingIntervention, order.Status)
 		assert.Nil(t, order.FulfilledAt)
 		assert.NotNil(t, order.Fulfilment.Exception)
+		// The ignored Signal does not end the Order
+		assert.False(t, env.IsWorkflowCompleted())
 
 		env.CancelWorkflow()
 	}, 3*time.Minute)
@@ -260,15 +267,6 @@ func TestFulfilmentExceptionIgnoredWhenInvalid(t *testing.T) {
 				},
 			},
 			status: workflows.OrderStatusConfirmed,
-		},
-		"already fulfilled": {
-			signals: []func(*testsuite.TestWorkflowEnvironment){
-				func(env *testsuite.TestWorkflowEnvironment) {
-					env.SignalWorkflow(workflows.SignalMarkFulfilled, workflows.MarkFulfilledSignal{})
-				},
-				func(env *testsuite.TestWorkflowEnvironment) { raiseException(env, supplierException) },
-			},
-			status: workflows.OrderStatusFulfilled,
 		},
 		"exception already outstanding": {
 			signals: []func(*testsuite.TestWorkflowEnvironment){
@@ -329,4 +327,22 @@ func TestFulfilmentExceptionIgnoredWhileReservingInventory(t *testing.T) {
 	env.ExecuteWorkflow(workflows.OrderWorkflow, newInput())
 
 	assertCancelled(t, env)
+}
+
+// Once fulfilled, the Workflow completes, so no later exception can reach it.
+// An exception delivered with the fulfilment does not change the final Order.
+func TestFulfilmentExceptionIgnoredOnceFulfilled(t *testing.T) {
+	env := newEnv()
+
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(workflows.SignalMarkFulfilled, workflows.MarkFulfilledSignal{})
+		raiseException(env, supplierException)
+	}, time.Minute)
+
+	env.ExecuteWorkflow(workflows.OrderWorkflow, newInput())
+
+	order := completedOrder(t, env)
+	assert.Equal(t, workflows.OrderStatusFulfilled, order.Status)
+	assert.Nil(t, order.Fulfilment.Exception)
+	assert.Empty(t, order.Fulfilment.Resolutions)
 }

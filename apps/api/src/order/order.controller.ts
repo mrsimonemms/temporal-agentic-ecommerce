@@ -51,7 +51,8 @@ export class OrderController {
   @ApiOperation({
     summary: 'Get an order',
     description:
-      'Returns the current state of the Order, queried from its Temporal Order Workflow. Each ' +
+      'Returns the current state of the Order from its Temporal Order Workflow, including after ' +
+      'fulfilment has completed the Workflow. Each ' +
       'line item reports `processing` until the Order is fulfilled, then `fulfilled` with its ' +
       'full quantity fulfilled. No fulfilment events are reported.',
   })

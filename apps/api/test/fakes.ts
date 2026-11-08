@@ -91,10 +91,13 @@ export const ORDER_FULFILLED_AT = '2026-10-28T15:30:00Z';
 export const EXCEPTION_RAISED_AT = '2026-10-28T13:00:00Z';
 export const EXCEPTION_RESOLVED_AT = '2026-10-28T14:00:00Z';
 
-// Stand-in for Temporal that mirrors the Go OrderWorkflow: one Workflow per
-// Workflow ID, confirmed until the markFulfilled Signal, which is only applied
-// to confirmed Orders. Fulfilment exceptions follow the Workflow's rules,
-// including its Update rejection messages.
+// Stand-in for TemporalService that mirrors the Go OrderWorkflow: one Workflow
+// per Workflow ID, confirmed until the markFulfilled Signal, which is only
+// applied to confirmed Orders. Fulfilment completes the Workflow, after which
+// TemporalService still returns the Order, treats further Signals as having no
+// effect and rejects resolutions with the Workflow's message, as modelled here.
+// Fulfilment exceptions follow the Workflow's rules, including its Update
+// rejection messages.
 export class FakeTemporalService {
   readonly workflows = new Map<string, Order>();
 

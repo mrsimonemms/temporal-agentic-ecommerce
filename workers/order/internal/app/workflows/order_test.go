@@ -66,6 +66,19 @@ func queryOrder(t *testing.T, env *testsuite.TestWorkflowEnvironment) *workflows
 	return &order
 }
 
+// completedOrder asserts the Workflow completed successfully and returns the
+// final Order from its result
+func completedOrder(t *testing.T, env *testsuite.TestWorkflowEnvironment) *workflows.Order {
+	t.Helper()
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var order workflows.Order
+	require.NoError(t, env.GetWorkflowResult(&order))
+	return &order
+}
+
 func assertCancelled(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
 	t.Helper()
 
@@ -85,6 +98,7 @@ func TestOrderWorkflowInitialState(t *testing.T) {
 		assert.Equal(t, input.ID, order.ID)
 		assert.Equal(t, workflows.OrderStatusReservingInventory, order.Status)
 		assert.Empty(t, order.InventoryReservationID)
+		assert.False(t, env.IsWorkflowCompleted())
 		assert.Equal(t, input.Buyer, order.Buyer)
 		assert.Equal(t, input.Currency, order.Currency)
 		assert.Equal(t, input.Lines, order.Lines)
@@ -176,6 +190,8 @@ func TestOrderWorkflowIgnoresFulfilmentWhileReservingInventory(t *testing.T) {
 
 		assert.Equal(t, workflows.OrderStatusConfirmed, order.Status)
 		assert.Nil(t, order.FulfilledAt)
+		// The ignored Signal does not end the Order
+		assert.False(t, env.IsWorkflowCompleted())
 
 		env.CancelWorkflow()
 	}, 10*time.Minute)
@@ -185,27 +201,13 @@ func TestOrderWorkflowIgnoresFulfilmentWhileReservingInventory(t *testing.T) {
 	assertCancelled(t, env)
 }
 
-func TestOrderWorkflowFulfilment(t *testing.T) {
+func TestOrderWorkflowRemainsRunningWhileConfirmed(t *testing.T) {
 	env := newEnv()
 
-	env.RegisterDelayedCallback(func() {
-		assert.Equal(t, workflows.OrderStatusConfirmed, queryOrder(t, env).Status)
-
-		env.SignalWorkflow(workflows.SignalMarkFulfilled, workflows.MarkFulfilledSignal{})
-	}, time.Minute)
-
-	env.RegisterDelayedCallback(func() {
-		order := queryOrder(t, env)
-
-		assert.Equal(t, workflows.OrderStatusFulfilled, order.Status)
-		require.NotNil(t, order.FulfilledAt)
-		assert.True(t, order.FulfilledAt.After(order.CreatedAt))
-	}, 2*time.Minute)
-
-	// Long after fulfilment, the Order remains open and queryable
+	// Long after confirmation, the Order waits for fulfilment or an exception
 	env.RegisterDelayedCallback(func() {
 		assert.False(t, env.IsWorkflowCompleted())
-		assert.Equal(t, workflows.OrderStatusFulfilled, queryOrder(t, env).Status)
+		assert.Equal(t, workflows.OrderStatusConfirmed, queryOrder(t, env).Status)
 
 		env.CancelWorkflow()
 	}, 30*24*time.Hour)
@@ -215,35 +217,53 @@ func TestOrderWorkflowFulfilment(t *testing.T) {
 	assertCancelled(t, env)
 }
 
-func TestOrderWorkflowDuplicateFulfilmentIgnored(t *testing.T) {
+func TestOrderWorkflowFulfilment(t *testing.T) {
 	env := newEnv()
-
-	var firstFulfilledAt time.Time
+	input := newInput()
+	var fulfilledAt time.Time
 
 	env.RegisterDelayedCallback(func() {
+		assert.Equal(t, workflows.OrderStatusConfirmed, queryOrder(t, env).Status)
+		assert.False(t, env.IsWorkflowCompleted())
+
+		fulfilledAt = env.Now()
 		env.SignalWorkflow(workflows.SignalMarkFulfilled, workflows.MarkFulfilledSignal{})
 	}, time.Minute)
 
-	env.RegisterDelayedCallback(func() {
-		order := queryOrder(t, env)
-		require.NotNil(t, order.FulfilledAt)
-		firstFulfilledAt = *order.FulfilledAt
+	env.ExecuteWorkflow(workflows.OrderWorkflow, input)
 
+	// Fulfilment is terminal: the Workflow completes rather than being cancelled
+	order := completedOrder(t, env)
+	assert.Equal(t, input.ID, order.ID)
+	assert.Equal(t, workflows.OrderStatusFulfilled, order.Status)
+	require.NotNil(t, order.FulfilledAt)
+	assert.True(t, fulfilledAt.Equal(*order.FulfilledAt))
+	assert.True(t, order.FulfilledAt.After(order.CreatedAt))
+	assert.Equal(t, "res_order-123", order.InventoryReservationID)
+	assert.Equal(t, input.Buyer, order.Buyer)
+	assert.Equal(t, input.Currency, order.Currency)
+	assert.Equal(t, input.Lines, order.Lines)
+	assert.Equal(t, int64(2999+4*650), order.Total)
+	assert.Nil(t, order.Fulfilment.Exception)
+}
+
+func TestOrderWorkflowDuplicateFulfilmentIgnored(t *testing.T) {
+	env := newEnv()
+	var fulfilledAt time.Time
+
+	env.RegisterDelayedCallback(func() {
+		fulfilledAt = env.Now()
 		env.SignalWorkflow(workflows.SignalMarkFulfilled, workflows.MarkFulfilledSignal{})
-	}, 2*time.Minute)
-
-	env.RegisterDelayedCallback(func() {
-		order := queryOrder(t, env)
-		assert.Equal(t, workflows.OrderStatusFulfilled, order.Status)
-		require.NotNil(t, order.FulfilledAt)
-		assert.True(t, firstFulfilledAt.Equal(*order.FulfilledAt))
-
-		env.CancelWorkflow()
-	}, 3*time.Minute)
+		env.SignalWorkflow(workflows.SignalMarkFulfilled, workflows.MarkFulfilledSignal{})
+	}, time.Minute)
 
 	env.ExecuteWorkflow(workflows.OrderWorkflow, newInput())
 
-	assertCancelled(t, env)
+	// The first Signal fulfils and completes the Order. The second changes nothing.
+	order := completedOrder(t, env)
+	assert.Equal(t, workflows.OrderStatusFulfilled, order.Status)
+	require.NotNil(t, order.FulfilledAt)
+	assert.True(t, fulfilledAt.Equal(*order.FulfilledAt))
 }
 
 func TestOrderWorkflowInvalidInput(t *testing.T) {

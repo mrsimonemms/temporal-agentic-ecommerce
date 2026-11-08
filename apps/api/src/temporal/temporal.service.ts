@@ -14,6 +14,7 @@ import { grpc as grpcProto } from '@temporalio/proto';
 import { setTimeout } from 'timers/promises';
 
 import {
+  ORDER_ERROR_INVALID_FULFILMENT_RESOLUTION,
   ORDER_QUERY_GET_ORDER,
   ORDER_SIGNAL_MARK_FULFILLED,
   ORDER_SIGNAL_REPORT_FULFILMENT_EXCEPTION,
@@ -76,62 +77,49 @@ export class TemporalService implements OnApplicationShutdown {
   }
 
   // Returns the current state of an Order, or undefined if no Order Workflow
-  // exists with that ID
+  // exists with that ID. A running Order is queried. Fulfilment completes the
+  // Order Workflow, so a completed Order is read from the Workflow result
+  // rather than by querying a closed Workflow. Both are the same Order state.
   async getOrder(orderId: string): Promise<Order | undefined> {
-    try {
-      return await this.withDeadline(() =>
-        this.client.workflow.getHandle(orderId).query<Order>(ORDER_QUERY_GET_ORDER),
-      );
-    } catch (err) {
-      if (err instanceof WorkflowNotFoundError) {
+    const handle = this.client.workflow.getHandle(orderId);
+    const status = await this.workflowStatus(handle, ORDER_WORKFLOW_TYPE);
+
+    switch (status) {
+      case undefined:
         return undefined;
-      }
-      throw err;
+      case 'COMPLETED':
+        return this.withDeadline(() => handle.result() as Promise<Order>);
+      default:
+        // Running, or ended without a result, for example when cancelled.
+        // Such an Order is only available while a worker can answer the Query.
+        return this.withDeadline(() => handle.query<Order>(ORDER_QUERY_GET_ORDER));
     }
   }
 
   // Signals the Order Workflow to mark the Order as fulfilled. Returns false if
-  // no running Order Workflow exists with that ID.
+  // no Order Workflow exists with that ID. A completed Order has already been
+  // fulfilled, so the Signal has no further effect, as for a running Order
+  // that ignores it.
   async markOrderFulfilled(orderId: string): Promise<boolean> {
-    try {
-      // The payload matches the Go MarkFulfilledSignal struct
-      await this.withDeadline(() =>
-        this.client.workflow.getHandle(orderId).signal(ORDER_SIGNAL_MARK_FULFILLED, {}),
-      );
-      return true;
-    } catch (err) {
-      if (err instanceof WorkflowNotFoundError) {
-        return false;
-      }
-      throw err;
-    }
+    // The payload matches the Go MarkFulfilledSignal struct
+    return this.signalOrder(orderId, ORDER_SIGNAL_MARK_FULFILLED, {});
   }
 
   // Signals the Order Workflow to report a fulfilment exception. Returns false
-  // if no running Order Workflow exists with that ID. Delivery does not mean
-  // the Workflow accepted the exception: invalid exceptions are ignored.
+  // if no Order Workflow exists with that ID. Delivery does not mean the
+  // Workflow accepted the exception: invalid exceptions are ignored, and a
+  // completed Order accepts none.
   async reportFulfilmentException(
     orderId: string,
     signal: ReportFulfilmentExceptionSignal,
   ): Promise<boolean> {
-    try {
-      await this.withDeadline(() =>
-        this.client.workflow
-          .getHandle(orderId)
-          .signal(ORDER_SIGNAL_REPORT_FULFILMENT_EXCEPTION, signal),
-      );
-      return true;
-    } catch (err) {
-      if (err instanceof WorkflowNotFoundError) {
-        return false;
-      }
-      throw err;
-    }
+    return this.signalOrder(orderId, ORDER_SIGNAL_REPORT_FULFILMENT_EXCEPTION, signal);
   }
 
   // Executes the Update resolving the current fulfilment exception and returns
-  // the resulting Order, or undefined if no running Order Workflow exists.
-  // Throws OrderUpdateRejectedError when the Workflow rejects the resolution.
+  // the resulting Order, or undefined if no Order Workflow exists. Throws
+  // OrderUpdateRejectedError when the Workflow rejects the resolution, or when
+  // the Order has completed and so is not awaiting intervention.
   async resolveFulfilmentException(
     orderId: string,
     req: ResolveFulfilmentExceptionRequest,
@@ -147,10 +135,35 @@ export class TemporalService implements OnApplicationShutdown {
       );
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) {
-        return undefined;
+        // A closed Workflow cannot accept Updates. Report it as the Workflow's
+        // validator would, since a completed Order is not awaiting intervention.
+        const order = await this.getOrder(orderId);
+        if (!order) {
+          return undefined;
+        }
+        throw new OrderUpdateRejectedError(
+          `order is not awaiting intervention: status is ${order.status}`,
+          ORDER_ERROR_INVALID_FULFILMENT_RESOLUTION,
+        );
       }
       if (err instanceof WorkflowUpdateFailedError && err.cause instanceof ApplicationFailure) {
         throw new OrderUpdateRejectedError(err.cause.message, err.cause.type ?? undefined);
+      }
+      throw err;
+    }
+  }
+
+  // Sends a Signal to an Order Workflow. Returns false only if no Order
+  // Workflow exists. A closed Workflow cannot receive Signals, which has the
+  // same effect as a running Workflow ignoring one it cannot accept.
+  private async signalOrder(orderId: string, name: string, payload: unknown): Promise<boolean> {
+    const handle = this.client.workflow.getHandle(orderId);
+    try {
+      await this.withDeadline(() => handle.signal(name, payload));
+      return true;
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        return (await this.workflowStatus(handle, ORDER_WORKFLOW_TYPE)) !== undefined;
       }
       throw err;
     }
@@ -176,7 +189,7 @@ export class TemporalService implements OnApplicationShutdown {
   // the state attached to its failure.
   async getShoppingAgent(id: string): Promise<ShoppingAgent | ClosedShoppingAgent | undefined> {
     const handle = this.client.workflow.getHandle(id);
-    const status = await this.shoppingAgentStatus(handle);
+    const status = await this.workflowStatus(handle, SHOPPING_AGENT_WORKFLOW_TYPE);
 
     switch (status) {
       case undefined:
@@ -196,7 +209,7 @@ export class TemporalService implements OnApplicationShutdown {
   // the decision or has already finished.
   async decidePurchase(id: string, req: DecidePurchaseRequest): Promise<ShoppingAgent | undefined> {
     const handle = this.client.workflow.getHandle(id);
-    const status = await this.shoppingAgentStatus(handle);
+    const status = await this.workflowStatus(handle, SHOPPING_AGENT_WORKFLOW_TYPE);
     if (status === undefined) {
       return undefined;
     }
@@ -226,14 +239,15 @@ export class TemporalService implements OnApplicationShutdown {
     }
   }
 
-  // Returns the Temporal status of a Shopping Agent Workflow, or undefined if
-  // no Workflow exists or it is not a Shopping Agent
-  private async shoppingAgentStatus(handle: WorkflowHandle): Promise<string | undefined> {
+  // Returns the Temporal status of a Workflow of the given type, or undefined
+  // if no Workflow exists with that ID or it is of another type
+  private async workflowStatus(
+    handle: WorkflowHandle,
+    workflowType: string,
+  ): Promise<string | undefined> {
     try {
       const description = await this.withDeadline(() => handle.describe());
-      return description.type === SHOPPING_AGENT_WORKFLOW_TYPE
-        ? description.status.name
-        : undefined;
+      return description.type === workflowType ? description.status.name : undefined;
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) {
         return undefined;

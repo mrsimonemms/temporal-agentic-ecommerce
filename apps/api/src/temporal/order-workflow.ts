@@ -19,6 +19,9 @@ export const ORDER_SIGNAL_REPORT_FULFILMENT_EXCEPTION = 'reportFulfilmentExcepti
 // Matches workflows.UpdateResolveFulfilmentException
 export const ORDER_UPDATE_RESOLVE_FULFILMENT_EXCEPTION = 'resolveFulfilmentException';
 
+// Matches workflows.errTypeInvalidResolution, the type of a rejected resolution
+export const ORDER_ERROR_INVALID_FULFILMENT_RESOLUTION = 'InvalidFulfilmentResolution';
+
 export interface OrderBuyer {
   id?: string;
   name?: string;
@@ -115,7 +118,8 @@ export class OrderUpdateRejectedError extends Error {
   }
 }
 
-// Current Order state returned by the getOrder Query. Timestamps are RFC 3339
+// Order state returned by the getOrder Query while the Order Workflow runs,
+// and as its result once fulfilment completes it. Timestamps are RFC 3339
 // strings as serialised by Go.
 export interface Order {
   id: string;

@@ -162,17 +162,20 @@ func reserveInventory(ctx workflow.Context, input *OrderInput) workflow.Future {
 }
 
 // OrderWorkflow is an Entity Workflow representing a single Order. It reserves
-// inventory, then remains open after fulfilment because an Order may later be
-// subject to returns, refunds or amendments. It only completes if cancelled.
-func OrderWorkflow(ctx workflow.Context, input *OrderInput) error {
+// inventory, then remains open while the Order is confirmed or awaiting
+// intervention, so fulfilment exceptions can be raised and resolved. In this
+// demonstration fulfilment is terminal: once the Order is fulfilled the
+// Workflow completes successfully and returns the final Order, which remains
+// available as the Workflow result. It also ends if cancelled.
+func OrderWorkflow(ctx workflow.Context, input *OrderInput) (*Order, error) {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("Starting OrderWorkflow")
 
 	if input == nil {
-		return temporal.NewNonRetryableApplicationError("order input is required", errTypeInvalidInput, nil)
+		return nil, temporal.NewNonRetryableApplicationError("order input is required", errTypeInvalidInput, nil)
 	}
 	if err := input.validate(); err != nil {
-		return temporal.NewNonRetryableApplicationError("invalid order input", errTypeInvalidInput, err)
+		return nil, temporal.NewNonRetryableApplicationError("invalid order input", errTypeInvalidInput, err)
 	}
 
 	order := newOrder(ctx, input)
@@ -180,7 +183,7 @@ func OrderWorkflow(ctx workflow.Context, input *OrderInput) error {
 	if err := workflow.SetQueryHandler(ctx, QueryGetOrder, func() (*Order, error) {
 		return order, nil
 	}); err != nil {
-		return fmt.Errorf("error registering %s query handler: %w", QueryGetOrder, err)
+		return nil, fmt.Errorf("error registering %s query handler: %w", QueryGetOrder, err)
 	}
 
 	// Activity retries are handled by Temporal. The future only resolves with an
@@ -212,19 +215,31 @@ func OrderWorkflow(ctx workflow.Context, input *OrderInput) error {
 		logger.Info("Order fulfilled", "orderId", order.ID)
 	})
 	if err := registerFulfilmentExceptionHandlers(ctx, selector, order, logger); err != nil {
-		return fmt.Errorf("error registering fulfilment exception handlers: %w", err)
+		return nil, fmt.Errorf("error registering fulfilment exception handlers: %w", err)
 	}
 	selector.AddReceive(ctx.Done(), func(workflow.ReceiveChannel, bool) {})
 
-	// Keep processing events until the Workflow is cancelled
-	for ctx.Err() == nil {
+	// Keep processing events until the Order is fulfilled or the Workflow is
+	// cancelled. Signals that the current status does not accept are ignored,
+	// so they never end the Workflow.
+	for ctx.Err() == nil && order.Status != OrderStatusFulfilled {
 		selector.Select(ctx)
 
 		if reservationErr != nil && ctx.Err() == nil {
-			return fmt.Errorf("error reserving inventory: %w", reservationErr)
+			return nil, fmt.Errorf("error reserving inventory: %w", reservationErr)
 		}
 	}
 
-	logger.Info("OrderWorkflow cancelled", "orderId", order.ID, "status", order.Status)
-	return ctx.Err()
+	if ctx.Err() != nil {
+		logger.Info("OrderWorkflow cancelled", "orderId", order.ID, "status", order.Status)
+		return nil, ctx.Err()
+	}
+
+	// Let any in-progress Update handler return before completing
+	if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
+		return nil, err
+	}
+
+	logger.Info("OrderWorkflow completed", "orderId", order.ID)
+	return order, nil
 }

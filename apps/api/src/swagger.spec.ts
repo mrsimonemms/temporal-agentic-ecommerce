@@ -259,9 +259,9 @@ describe('OpenAPI document', () => {
     expect(op.responses['200'].content?.['application/json'].schema).toEqual({
       $ref: '#/components/schemas/CatalogueDto',
     });
-    expect(
-      (op.responses['200'].content?.['application/json'] as { example?: unknown }).example,
-    ).toMatchObject({
+    const json = op.responses['200'].content?.['application/json'] as
+      { example?: unknown } | undefined;
+    expect(json?.example).toMatchObject({
       currency: 'GBP',
       products: expect.arrayContaining([
         {

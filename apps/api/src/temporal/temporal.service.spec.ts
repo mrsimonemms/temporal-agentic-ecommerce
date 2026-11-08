@@ -96,27 +96,73 @@ describe('TemporalService', () => {
     });
   });
 
+  // Describes the Order Workflow with the given Temporal status
+  function orderStatus(status: string, type = 'OrderWorkflow') {
+    describe_.mockResolvedValue({ type, status: { name: status } });
+  }
+
+  function noWorkflow() {
+    describe_.mockRejectedValue(new WorkflowNotFoundError('not found', 'ord_123', undefined));
+  }
+
+  const fulfilled = {
+    id: 'ord_123',
+    status: 'fulfilled',
+    fulfilledAt: '2026-11-08T12:00:00Z',
+    inventoryReservationId: 'res_ord_123',
+    fulfilment: {
+      sources: [{ lineId: 'li_2', source: 'warehouse-north' }],
+      resolutions: [{ lineId: 'li_2', alternativeSource: 'warehouse-north' }],
+    },
+  };
+
   describe('getOrder', () => {
-    it('queries the Order Workflow using the getOrder Query', async () => {
+    it('queries a running Order Workflow using the getOrder Query', async () => {
       const order = { id: 'ord_123', status: 'confirmed' };
+      orderStatus('RUNNING');
       query.mockResolvedValueOnce(order);
 
       await expect(service.getOrder('ord_123')).resolves.toEqual(order);
       expect(getHandle).toHaveBeenCalledExactlyOnceWith('ord_123');
       expect(query).toHaveBeenCalledExactlyOnceWith('getOrder');
-      expect(withDeadline).toHaveBeenCalledOnce();
+      expect(result).not.toHaveBeenCalled();
+      // Both the describe and the Query are bounded
+      expect(withDeadline).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns a fulfilled Order from the completed Workflow result without querying', async () => {
+      orderStatus('COMPLETED');
+      result.mockResolvedValueOnce(fulfilled);
+
+      await expect(service.getOrder('ord_123')).resolves.toEqual(fulfilled);
+      expect(query).not.toHaveBeenCalled();
     });
 
     it('returns undefined when no Workflow exists', async () => {
-      query.mockRejectedValueOnce(new WorkflowNotFoundError('not found', 'ord_123', undefined));
+      noWorkflow();
 
       await expect(service.getOrder('ord_123')).resolves.toBeUndefined();
+      expect(query).not.toHaveBeenCalled();
+    });
+
+    it('returns undefined for a Workflow that is not an Order', async () => {
+      orderStatus('RUNNING', 'ShoppingAgentWorkflow');
+
+      await expect(service.getOrder('ord_123')).resolves.toBeUndefined();
+      expect(query).not.toHaveBeenCalled();
     });
 
     it('propagates other failures', async () => {
-      query.mockRejectedValueOnce(new Error('Temporal unavailable'));
-
+      describe_.mockRejectedValueOnce(new Error('Temporal unavailable'));
       await expect(service.getOrder('ord_123')).rejects.toThrow('Temporal unavailable');
+
+      orderStatus('RUNNING');
+      query.mockRejectedValueOnce(new Error('Query timed out'));
+      await expect(service.getOrder('ord_123')).rejects.toThrow('Query timed out');
+
+      orderStatus('COMPLETED');
+      result.mockRejectedValueOnce(new Error('History unavailable'));
+      await expect(service.getOrder('ord_123')).rejects.toThrow('History unavailable');
     });
   });
 
@@ -128,10 +174,21 @@ describe('TemporalService', () => {
       expect(withDeadline).toHaveBeenCalledOnce();
     });
 
-    it('returns false when no running Workflow exists', async () => {
+    it('returns false when no Workflow exists', async () => {
       signal.mockRejectedValueOnce(new WorkflowNotFoundError('not found', 'ord_123', undefined));
+      noWorkflow();
 
       await expect(service.markOrderFulfilled('ord_123')).resolves.toBe(false);
+    });
+
+    it('has no further effect once fulfilment has completed the Workflow', async () => {
+      // Temporal reports a Signal to a closed Workflow as not found
+      signal.mockRejectedValueOnce(
+        new WorkflowNotFoundError('workflow execution already completed', 'ord_123', undefined),
+      );
+      orderStatus('COMPLETED');
+
+      await expect(service.markOrderFulfilled('ord_123')).resolves.toBe(true);
     });
 
     it('propagates other failures', async () => {
@@ -151,10 +208,20 @@ describe('TemporalService', () => {
       expect(withDeadline).toHaveBeenCalledOnce();
     });
 
-    it('returns false when no running Workflow exists', async () => {
+    it('returns false when no Workflow exists', async () => {
       signal.mockRejectedValueOnce(new WorkflowNotFoundError('not found', 'ord_123', undefined));
+      noWorkflow();
 
       await expect(service.reportFulfilmentException('ord_123', exception)).resolves.toBe(false);
+    });
+
+    it('reports delivery to a completed Order, which accepts no exception', async () => {
+      signal.mockRejectedValueOnce(
+        new WorkflowNotFoundError('workflow execution already completed', 'ord_123', undefined),
+      );
+      orderStatus('COMPLETED');
+
+      await expect(service.reportFulfilmentException('ord_123', exception)).resolves.toBe(true);
     });
 
     it('propagates other failures', async () => {
@@ -181,12 +248,27 @@ describe('TemporalService', () => {
       expect(withDeadline).toHaveBeenCalledOnce();
     });
 
-    it('returns undefined when no running Workflow exists', async () => {
+    it('returns undefined when no Workflow exists', async () => {
       executeUpdate.mockRejectedValueOnce(
         new WorkflowNotFoundError('not found', 'ord_123', undefined),
       );
+      noWorkflow();
 
       await expect(service.resolveFulfilmentException('ord_123', req)).resolves.toBeUndefined();
+    });
+
+    it('rejects a resolution for a completed Order as the Workflow would', async () => {
+      executeUpdate.mockRejectedValueOnce(
+        new WorkflowNotFoundError('workflow execution already completed', 'ord_123', undefined),
+      );
+      orderStatus('COMPLETED');
+      result.mockResolvedValueOnce(fulfilled);
+
+      const err = await service.resolveFulfilmentException('ord_123', req).catch((e) => e);
+
+      expect(err).toBeInstanceOf(OrderUpdateRejectedError);
+      expect(err.message).toBe('order is not awaiting intervention: status is fulfilled');
+      expect(err.type).toBe('InvalidFulfilmentResolution');
     });
 
     it('translates a rejected Update into OrderUpdateRejectedError', async () => {

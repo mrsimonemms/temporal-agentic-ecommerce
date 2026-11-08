@@ -34,7 +34,7 @@ const orderIdPathParam = ApiParam({
 });
 
 const orderNotFoundResponse = ApiNotFoundResponse({
-  description: 'No running Order Workflow exists with this ID',
+  description: 'No Order Workflow exists with this ID',
   schema: schemaRef('HttpError'),
 });
 
@@ -97,8 +97,9 @@ export class DemoController {
   @ApiOperation({
     summary: 'Get the Order Workflow state (demo only)',
     description:
-      'Demo-only endpoint, not part of UCP. Returns the current state of the Order Workflow, ' +
-      'queried with the `getOrder` Query. This is the internal operational view used to ' +
+      'Demo-only endpoint, not part of UCP. Returns the current state of the Order Workflow: ' +
+      'queried with the `getOrder` Query while it runs, or read from its result once ' +
+      'fulfilment has completed it. This is the internal operational view used to ' +
       'observe the demo: it includes the Workflow status (`reserving_inventory`, `confirmed`, ' +
       '`awaiting_intervention` or `fulfilled`), the inventory reservation and the fulfilment ' +
       'plan, none of which are exposed by the UCP Order.\n\nRead-only: the Order is not ' +
@@ -118,13 +119,14 @@ export class DemoController {
     summary: 'Mark an order as fulfilled (demo only)',
     description:
       'Demo-only endpoint, not part of UCP. Sends the `markFulfilled` Signal to the Order ' +
-      'Workflow and returns the resulting UCP Order. Repeating the request has no further ' +
-      'effect. No request body is required.',
+      'Workflow and returns the resulting UCP Order. Fulfilment completes the Order ' +
+      'Workflow, so repeating the request has no further effect and returns the fulfilled ' +
+      'Order. No request body is required.',
   })
   @orderIdParam
   @orderOrErrorResponse(
-    'The updated Order, or an error response with code `not_found` when no running Order ' +
-      'Workflow exists',
+    'The updated Order, or an error response with code `not_found` when no Order Workflow ' +
+      'exists',
   )
   @orderUnavailableResponse
   fulfilOrder(@Param('id') id: string) {

@@ -203,6 +203,44 @@ describe('OrderController and DemoController', () => {
     });
   });
 
+  // Fulfilment completes the Order Workflow. The API reads a completed Order
+  // from the Workflow result, so it remains visible everywhere.
+  describe('after fulfilment completes the Order Workflow', () => {
+    it('returns the fulfilled internal state from the demo endpoint', async () => {
+      const { id } = await placeOrder();
+      await fulfilOrder(id);
+
+      const res = await app.inject({ method: 'GET', url: `/v1/demo/orders/${id}` });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        id,
+        status: 'fulfilled',
+        fulfilledAt: expect.any(String),
+        lines: [
+          expect.objectContaining({ productId: 'sku_kettle' }),
+          expect.objectContaining({ productId: 'sku_mug_set' }),
+        ],
+      });
+    });
+
+    it('rejects a resolution with HTTP 409, as the Order is not awaiting intervention', async () => {
+      const { id } = await placeOrder();
+      await fulfilOrder(id);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/demo/orders/${id}/resolve-fulfilment-exception`,
+        payload: { lineId: 'li_2', alternativeSource: 'warehouse-north', approvedBy: 'ops' },
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        message: 'order is not awaiting intervention: status is fulfilled',
+      });
+    });
+  });
+
   describe('GET /orders/:id (permalink)', () => {
     it('is the unversioned buyer-facing page, distinct from the UCP API endpoint', async () => {
       const { id, permalink_url } = await placeOrder();
