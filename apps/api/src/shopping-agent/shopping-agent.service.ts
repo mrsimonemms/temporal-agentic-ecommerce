@@ -24,7 +24,11 @@ export class ShoppingAgentService {
     await this.temporal.startShoppingAgentWorkflow(id, {
       request: dto.request,
       buyer: { email: dto.buyer.email, name: dto.buyer.name },
-      demo: dto.demo && { inventoryFailures: dto.demo.inventoryFailures },
+      // The scenario is always explicit, so the Workflow state records it
+      demo: {
+        scenario: dto.demo?.scenario ?? 'none',
+        inventoryFailures: dto.demo?.inventoryFailures,
+      },
     });
 
     return { id };

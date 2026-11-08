@@ -22,7 +22,7 @@ describe('AgentStartForm', () => {
     );
 
     expect(choices).toEqual(['None: true', '1 failure: false', '2 failures: false']);
-    expect(text(body)).toContain('Not part of the purchase');
+    expect(text(body)).toContain('not part of the purchase');
   });
 
   it('starts the agent from a single button', () => {
@@ -48,5 +48,22 @@ describe('AgentStartForm', () => {
 
     expect(content).toContain('The shopping agent did not start');
     expect(content).toContain('The commerce API could not be reached');
+  });
+
+  it('offers named AI failure scenarios, defaulting to normal execution', () => {
+    const { body } = render(AgentStartForm, { props: { onstart } });
+    const options = [
+      ...body.matchAll(/<input type="radio" name="scenario" value="(\w+)"([^>]*)>/g),
+    ].map(([, value, attrs]) => `${value}: ${/\bchecked\b/.test(attrs)}`);
+    const content = text(body);
+
+    expect(options).toEqual(['none: true', 'ai_service_unavailable: false']);
+    expect(content).toContain('Normal execution No simulated AI failures.');
+    expect(content).toContain(
+      'AI service unavailable Simulates five transient failures before OpenAI planning succeeds.',
+    );
+    expect(content).toContain('Affects the Shopping Agent only');
+    // The inventory failures remain a separate control, for the Order
+    expect(content).toContain('Affects the Order the agent places, not the agent');
   });
 });

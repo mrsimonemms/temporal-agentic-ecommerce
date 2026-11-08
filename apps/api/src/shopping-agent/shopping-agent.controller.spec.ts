@@ -76,7 +76,7 @@ describe('ShoppingAgentController', () => {
       expect(temporal.startShoppingAgentWorkflow).toHaveBeenCalledExactlyOnceWith(id, {
         request,
         buyer,
-        demo: undefined,
+        demo: { scenario: 'none' },
       });
     });
 
@@ -86,7 +86,7 @@ describe('ShoppingAgentController', () => {
       expect(temporal.startShoppingAgentWorkflow).toHaveBeenCalledExactlyOnceWith(id, {
         request,
         buyer,
-        demo: { inventoryFailures: 2 },
+        demo: { scenario: 'none', inventoryFailures: 2 },
       });
     });
 
@@ -104,7 +104,43 @@ describe('ShoppingAgentController', () => {
       expect(temporal.startShoppingAgentWorkflow).toHaveBeenCalledExactlyOnceWith(id, {
         request,
         buyer,
-        demo: undefined,
+        demo: { scenario: 'none' },
+      });
+    });
+
+    it.each([
+      ['none', 'none'],
+      ['ai_service_unavailable', 'ai_service_unavailable'],
+    ] as const)('accepts the %s scenario and passes it to the Workflow', async (_, scenario) => {
+      const id = await startAgent({ request, buyer, demo: { scenario } });
+
+      expect(temporal.startShoppingAgentWorkflow).toHaveBeenCalledExactlyOnceWith(id, {
+        request,
+        buyer,
+        demo: { scenario },
+      });
+    });
+
+    it('keeps the scenario and inventory failures independent', async () => {
+      const id = await startAgent({
+        request,
+        buyer,
+        demo: { scenario: 'ai_service_unavailable', inventoryFailures: 2 },
+      });
+
+      expect(temporal.startShoppingAgentWorkflow).toHaveBeenCalledExactlyOnceWith(id, {
+        request,
+        buyer,
+        demo: { scenario: 'ai_service_unavailable', inventoryFailures: 2 },
+      });
+    });
+
+    it('shows the scenario in the agent state', async () => {
+      const id = await startAgent({ request, buyer, demo: { scenario: 'ai_service_unavailable' } });
+
+      expect((await get(id)).json()).toMatchObject({
+        status: 'planning',
+        demo: { scenario: 'ai_service_unavailable' },
       });
     });
 
@@ -117,6 +153,12 @@ describe('ShoppingAgentController', () => {
       ['negative inventory failures', { request, buyer, demo: { inventoryFailures: -1 } }],
       ['too many inventory failures', { request, buyer, demo: { inventoryFailures: 3 } }],
       ['fractional inventory failures', { request, buyer, demo: { inventoryFailures: 1.5 } }],
+      ['an unknown scenario', { request, buyer, demo: { scenario: 'payment_declined' } }],
+      [
+        'a differently cased scenario',
+        { request, buyer, demo: { scenario: 'AI_SERVICE_UNAVAILABLE' } },
+      ],
+      ['a numeric scenario', { request, buyer, demo: { scenario: 5 } }],
     ])('rejects %s', async (_, payload) => {
       const res = await start(payload);
 
@@ -142,6 +184,7 @@ describe('ShoppingAgentController', () => {
         status: 'planning',
         request,
         buyer,
+        demo: { scenario: 'none' },
         createdAt: expect.any(String),
       });
 

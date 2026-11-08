@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { decidePurchase, getShoppingAgent, isFinal, isNotFound, startShoppingAgent } from './agent';
+import {
+  decidePurchase,
+  getShoppingAgent,
+  isFinal,
+  isNotFound,
+  scenarioLabel,
+  startAgentRequest,
+  startShoppingAgent,
+} from './agent';
 import { startPolling } from './poll';
 import { agentFixture } from './testing/fixtures';
 import { ApiError } from './ucp';
@@ -191,5 +199,49 @@ describe('polling a Shopping Agent', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledOnce();
     stop();
+  });
+});
+
+describe('startAgentRequest', () => {
+  const form = {
+    request: '  Buy me a kettle and two sets of mugs. Keep it under £100.  ',
+    name: 'Jane Doe',
+    email: 'jane@example.com',
+    scenario: 'none' as const,
+    inventoryFailures: 0,
+  };
+
+  it('always sends the scenario, defaulting to normal execution', () => {
+    expect(startAgentRequest(form)).toEqual({
+      request: 'Buy me a kettle and two sets of mugs. Keep it under £100.',
+      buyer: { email: 'jane@example.com', name: 'Jane Doe' },
+      demo: { scenario: 'none' },
+    });
+  });
+
+  it('sends the AI scenario and inventory failures independently', () => {
+    expect(startAgentRequest({ ...form, scenario: 'ai_service_unavailable' }).demo).toEqual({
+      scenario: 'ai_service_unavailable',
+    });
+    expect(startAgentRequest({ ...form, inventoryFailures: 2 }).demo).toEqual({
+      scenario: 'none',
+      inventoryFailures: 2,
+    });
+    expect(
+      startAgentRequest({ ...form, scenario: 'ai_service_unavailable', inventoryFailures: 1 }).demo,
+    ).toEqual({ scenario: 'ai_service_unavailable', inventoryFailures: 1 });
+  });
+
+  it('omits an empty name', () => {
+    expect(startAgentRequest({ ...form, name: '  ' }).buyer).toEqual({ email: 'jane@example.com' });
+  });
+});
+
+describe('scenarioLabel', () => {
+  it('names each scenario, treating a missing one as normal execution', () => {
+    expect(scenarioLabel('none')).toBe('Normal execution');
+    expect(scenarioLabel(undefined)).toBe('Normal execution');
+    expect(scenarioLabel('ai_service_unavailable')).toBe('AI service unavailable');
+    expect(scenarioLabel('something_new')).toBe('something_new');
   });
 });

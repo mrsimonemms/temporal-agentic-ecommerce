@@ -151,4 +151,41 @@ describe('AgentPanel', () => {
     expect(content).toContain('Connection interrupted, retrying');
     expect(content).toContain('£82.99');
   });
+
+  it('shows the selected AI failure scenario, which affects the agent only', () => {
+    const content = text(
+      renderPanel({
+        agent: agentFixture('awaiting_approval', {
+          demo: { scenario: 'ai_service_unavailable', inventoryFailures: 2 },
+        }),
+      }).body,
+    );
+
+    expect(content).toContain('Demo only · AI failure scenario AI service unavailable');
+    expect(content).toContain('Affects this Shopping Agent only, not the Order it places.');
+  });
+
+  it('shows normal execution when no failures are simulated', () => {
+    const content = text(
+      renderPanel({ agent: agentFixture('planning', { demo: { scenario: 'none' } }) }).body,
+    );
+
+    expect(content).toContain('AI failure scenario Normal execution');
+    expect(content).toContain('The agent is reading the catalogue');
+    expect(content).not.toContain('simulated outage');
+  });
+
+  it('explains that Temporal is retrying a simulated outage while planning', () => {
+    const content = text(
+      renderPanel({
+        agent: agentFixture('planning', { demo: { scenario: 'ai_service_unavailable' } }),
+      }).body,
+    );
+
+    expect(content).toContain('Planning · AI service unavailable');
+    expect(content).toContain('Temporal is retrying the planning automatically');
+    expect(content).toContain('without repeating the catalogue retrieval');
+    // No live attempt count is shown, as the dashboard does not observe retries
+    expect(content).not.toMatch(/attempt \d/i);
+  });
 });

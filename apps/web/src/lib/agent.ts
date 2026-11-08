@@ -15,6 +15,30 @@ export type AgentStatus =
 
 export type PurchaseDecision = 'approve' | 'reject';
 
+// Mirrors the demo scenario values accepted by StartShoppingAgentDto. A named
+// failure behaviour for the Shopping Agent's AI planning, not the Order.
+export type DemoScenario = 'none' | 'ai_service_unavailable';
+
+export interface ScenarioOption {
+  id: DemoScenario;
+  label: string;
+  description: string;
+}
+
+export const SCENARIOS: ScenarioOption[] = [
+  { id: 'none', label: 'Normal execution', description: 'No simulated AI failures.' },
+  {
+    id: 'ai_service_unavailable',
+    label: 'AI service unavailable',
+    description: 'Simulates five transient failures before OpenAI planning succeeds.',
+  },
+];
+
+// The display name of a scenario, for any value the API returns
+export function scenarioLabel(scenario: string | undefined): string {
+  return SCENARIOS.find((option) => option.id === (scenario || 'none'))?.label ?? scenario ?? '';
+}
+
 export interface ProposalLine {
   productId: string;
   title: string;
@@ -52,7 +76,7 @@ export interface AgentState {
   orderId?: string;
   orderPermalinkUrl?: string;
   error?: string;
-  demo?: { inventoryFailures?: number };
+  demo?: { scenario?: DemoScenario; inventoryFailures?: number };
   createdAt?: string;
 }
 
@@ -60,7 +84,27 @@ export interface AgentState {
 export interface StartAgentRequest {
   request: string;
   buyer: { email: string; name?: string };
-  demo?: { inventoryFailures: number };
+  demo?: { scenario?: DemoScenario; inventoryFailures?: number };
+}
+
+// Builds the start request from the form. The scenario is always sent, so the
+// agent records it. Inventory failures, which affect the Order, are only sent
+// when some are requested.
+export function startAgentRequest(form: {
+  request: string;
+  name: string;
+  email: string;
+  scenario: DemoScenario;
+  inventoryFailures: number;
+}): StartAgentRequest {
+  return {
+    request: form.request.trim(),
+    buyer: { email: form.email.trim(), name: form.name.trim() || undefined },
+    demo: {
+      scenario: form.scenario,
+      ...(form.inventoryFailures > 0 ? { inventoryFailures: form.inventoryFailures } : {}),
+    },
+  };
 }
 
 export interface DecideRequest {

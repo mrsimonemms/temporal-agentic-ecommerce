@@ -70,6 +70,8 @@ Rules:
 type PlanPurchaseInput struct {
 	Request   string    `json:"request"`
 	Catalogue Catalogue `json:"catalogue"`
+	// Demo only: a named failure behaviour, applied before OpenAI is called
+	Scenario DemoScenario `json:"scenario,omitempty"`
 }
 
 // ProposalLine is a product and quantity selected by the agent. Prices come
@@ -183,6 +185,10 @@ func (a *Activities) PlanPurchase(ctx context.Context, input *PlanPurchaseInput)
 	}
 	if err := input.Catalogue.validate(); err != nil {
 		return nil, temporal.NewNonRetryableApplicationError("invalid catalogue", ErrTypeInvalidPlanInput, err)
+	}
+	// Checked before any OpenAI request, so a simulated failure costs no tokens
+	if err := simulateScenario(ctx, input.Scenario); err != nil {
+		return nil, err
 	}
 
 	params := responses.ResponseNewParams{

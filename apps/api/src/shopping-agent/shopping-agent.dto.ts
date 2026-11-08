@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 
 import type { OrderBuyer } from '../temporal/order-workflow';
+import { DEMO_SCENARIOS, type DemoScenario } from '../temporal/shopping-agent-workflow';
 import type {
   ProposalLine,
   PurchaseDecision,
@@ -62,19 +63,36 @@ class ShoppingAgentBuyerDto implements OrderBuyer {
 }
 
 class ShoppingAgentDemoDto implements ShoppingAgentDemoOptions {
-  @ApiProperty({
+  @ApiPropertyOptional({
+    enum: DEMO_SCENARIOS,
+    default: 'none',
+    description:
+      'Demo only. A named failure behaviour for the Shopping Agent, not the Order. `none` runs ' +
+      'normally. `ai_service_unavailable` makes the first five attempts of the AI planning ' +
+      'Activity fail as if the AI service were unavailable, before OpenAI is called. Temporal ' +
+      'retries the Activity automatically and the sixth attempt plans the purchase. Catalogue ' +
+      'retrieval is not repeated. Defaults to `none`.',
+    example: 'ai_service_unavailable',
+  })
+  @IsOptional()
+  @IsIn(DEMO_SCENARIOS)
+  scenario?: DemoScenario;
+
+  @ApiPropertyOptional({
     description:
       'Demo only. Number of inventory reservation attempts that fail for the Order the ' +
-      'purchase places. Configured on the checkout before it is completed.',
+      'purchase places. Configured on the checkout before it is completed. Independent of ' +
+      '`scenario`.',
     type: 'integer',
     minimum: 0,
     maximum: MAX_INVENTORY_FAILURES,
     example: 2,
   })
+  @IsOptional()
   @IsInt()
   @Min(0)
   @Max(MAX_INVENTORY_FAILURES)
-  inventoryFailures: number;
+  inventoryFailures?: number;
 }
 
 export class StartShoppingAgentDto {

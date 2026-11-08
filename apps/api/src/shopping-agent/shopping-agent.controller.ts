@@ -56,9 +56,14 @@ export class ShoppingAgentController {
       'and budget, and the Workflow then waits durably for a human decision.\n\n' +
       'Once approved, the Workflow creates and completes a UCP checkout, which places an Order ' +
       'that continues independently in its own Workflow.\n\n' +
-      '`demo.inventoryFailures` optionally simulates up to two inventory reservation failures ' +
-      'for that Order. It is applied to the checkout before completion and is not part of the ' +
-      'purchase.\n\nReturns once the Workflow has started: planning continues in the background.',
+      'Two independent demo-only controls are available. `demo.scenario` selects a named ' +
+      'failure behaviour for the Shopping Agent: `ai_service_unavailable` fails the first five ' +
+      'attempts of the AI planning Activity before OpenAI is called, and Temporal retries it ' +
+      'automatically until the sixth attempt plans the purchase. It defaults to `none`. ' +
+      '`demo.inventoryFailures` simulates up to two inventory reservation failures for the ' +
+      'Order the purchase places. It is applied to the checkout before completion. Neither is ' +
+      'part of the purchase.\n\nReturns once the Workflow has started: planning continues in ' +
+      'the background.',
   })
   @ApiBody({
     type: StartShoppingAgentDto,
@@ -78,6 +83,14 @@ export class ShoppingAgentController {
           demo: { inventoryFailures: 2 },
         },
       },
+      aiServiceUnavailable: {
+        summary: 'The same request while the AI service is unavailable, then inventory failures',
+        value: {
+          request: shoppingAgentRequestExample,
+          buyer: { email: 'ada@example.com', name: 'Ada Lovelace' },
+          demo: { scenario: 'ai_service_unavailable', inventoryFailures: 2 },
+        },
+      },
     },
   })
   @ApiCreatedResponse({
@@ -87,7 +100,8 @@ export class ShoppingAgentController {
   @ApiBadRequestResponse({
     description:
       '`request` is missing, blank or longer than 1000 characters, `buyer.email` is not an ' +
-      'email address, or `demo.inventoryFailures` is not an integer between 0 and 2',
+      'email address, `demo.scenario` is not `none` or `ai_service_unavailable`, or ' +
+      '`demo.inventoryFailures` is not an integer between 0 and 2',
     schema: schemaRef('HttpError'),
   })
   @temporalUnavailableResponse

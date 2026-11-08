@@ -1,5 +1,10 @@
 <script lang="ts">
-  import type { StartAgentRequest } from '$lib/agent';
+  import {
+    type DemoScenario,
+    SCENARIOS,
+    type StartAgentRequest,
+    startAgentRequest,
+  } from '$lib/agent';
 
   import FailureChoices from './FailureChoices.svelte';
 
@@ -23,6 +28,7 @@
   let request = $state('Buy me a kettle and two sets of mugs. Keep it under £100.');
   let name = $state('Jane Doe');
   let email = $state('jane@example.com');
+  let scenario = $state<DemoScenario>('none');
   let inventoryFailures = $state(0);
 
   let canStart = $derived(request.trim() !== '' && email.trim() !== '');
@@ -32,11 +38,7 @@
     if (!canStart) {
       return;
     }
-    onstart({
-      request: request.trim(),
-      buyer: { email: email.trim(), name: name.trim() || undefined },
-      demo: inventoryFailures > 0 ? { inventoryFailures } : undefined,
-    });
+    onstart(startAgentRequest({ request, name, email, scenario, inventoryFailures }));
   }
 </script>
 
@@ -72,6 +74,30 @@
     </label>
   </fieldset>
 
+  <fieldset class="demo-control">
+    <legend class="eyebrow">Demo only · AI failure scenario</legend>
+    <div class="scenarios">
+      {#each SCENARIOS as option (option.id)}
+        <label class={['scenario', { selected: scenario === option.id }]}>
+          <input
+            type="radio"
+            name="scenario"
+            value={option.id}
+            bind:group={scenario}
+            disabled={busy}
+          />
+          <span class="scenario-text">
+            <span class="scenario-label">{option.label}</span>
+            <span class="scenario-description">{option.description}</span>
+          </span>
+        </label>
+      {/each}
+    </div>
+    <p class="hint">
+      Affects the Shopping Agent only. Temporal retries the failures automatically.
+    </p>
+  </fieldset>
+
   <div class="demo-control">
     <div class="demo-heading">
       <span class="eyebrow">Demo only · inventory failures</span>
@@ -82,7 +108,8 @@
       onselect={(failures) => (inventoryFailures = failures)}
     />
     <p class="hint">
-      Applied to the Order the agent places, before checkout completes. Not part of the purchase.
+      Affects the Order the agent places, not the agent. Applied before checkout completes and not
+      part of the purchase.
     </p>
   </div>
 
@@ -142,14 +169,11 @@
     border-color: var(--accent);
   }
 
-  fieldset {
+  .buyer {
     border: 0;
     margin: 0;
     padding: 0;
     min-width: 0;
-  }
-
-  .buyer {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
     gap: 0.75rem;
@@ -169,5 +193,67 @@
   .actions {
     display: flex;
     justify-content: flex-end;
+  }
+
+  /* Demo controls share the dashed box; the fieldset only adds its legend */
+  fieldset.demo-control {
+    margin: 0;
+    min-width: 0;
+  }
+
+  /* A floated legend renders inside the box, like the other demo headings */
+  fieldset.demo-control legend {
+    float: left;
+    width: 100%;
+    padding: 0;
+  }
+
+  .scenarios {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+    gap: 0.5rem;
+  }
+
+  /* Matches the inventory failure choices */
+  .scenario {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--surface);
+    cursor: pointer;
+  }
+
+  .scenario.selected {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  .scenario input {
+    width: auto;
+    margin: 0.2rem 0 0;
+    padding: 0;
+    accent-color: var(--accent);
+  }
+
+  .scenario-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .scenario-label {
+    font-weight: 600;
+  }
+
+  .scenario.selected .scenario-label {
+    color: var(--accent);
+  }
+
+  .scenario-description {
+    font-size: 0.85rem;
+    color: var(--muted);
   }
 </style>

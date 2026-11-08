@@ -373,6 +373,11 @@ func TestShoppingAgentInvalidInput(t *testing.T) {
 			Buyer:   workflows.Buyer{Email: buyerEmail},
 			Demo:    &workflows.ShoppingAgentDemoOptions{InventoryFailures: -1},
 		},
+		"unknown scenario": {
+			Request: kettleRequest,
+			Buyer:   workflows.Buyer{Email: buyerEmail},
+			Demo:    &workflows.ShoppingAgentDemoOptions{Scenario: "payment_declined"},
+		},
 		"too many inventory failures": {
 			Request: kettleRequest,
 			Buyer:   workflows.Buyer{Email: buyerEmail},

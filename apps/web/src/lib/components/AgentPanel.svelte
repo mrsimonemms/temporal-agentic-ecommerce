@@ -1,7 +1,7 @@
 <script lang="ts">
   import { resolve } from '$app/paths';
 
-  import type { AgentState, PurchaseDecision } from '$lib/agent';
+  import { type AgentState, type PurchaseDecision, scenarioLabel } from '$lib/agent';
   import { agentStatus, formatAmount, formatTime } from '$lib/format';
 
   import LineItems from './LineItems.svelte';
@@ -39,6 +39,8 @@
       total: line.total,
     })) ?? [],
   );
+
+  let simulatedOutage = $derived(agent?.demo?.scenario === 'ai_service_unavailable');
 
   // Only a validated proposal awaiting a decision can be approved
   let canDecide = $derived(agent?.status === 'awaiting_approval' && !!proposal);
@@ -84,10 +86,29 @@
       </figure>
     {/if}
 
+    {#if agent.demo}
+      <div class="demo-control">
+        <div class="demo-heading">
+          <span class="eyebrow">Demo only · AI failure scenario</span>
+          <span class="configured">{scenarioLabel(agent.demo.scenario)}</span>
+        </div>
+        <p class="hint">Affects this Shopping Agent only, not the Order it places.</p>
+      </div>
+    {/if}
+
     {#if error}
       <div class="notice warning" role="status">
         <strong>Connection interrupted, retrying</strong>
         <p>{error}. Showing the last known state. The agent itself continues in Temporal.</p>
+      </div>
+    {:else if agent.status === 'planning' && simulatedOutage}
+      <div class="notice info" role="status">
+        <strong>Planning · AI service unavailable</strong>
+        <p>
+          The first five planning attempts fail with a simulated outage. Temporal is retrying the
+          planning automatically, without repeating the catalogue retrieval it has already
+          completed. No action is needed: the agent plans the purchase once the service responds.
+        </p>
       </div>
     {:else if agent.status === 'planning'}
       <div class="notice info" role="status">

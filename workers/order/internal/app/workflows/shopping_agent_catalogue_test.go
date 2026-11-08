@@ -117,3 +117,20 @@ func TestShoppingAgentDoesNotPlanWithAnInvalidCatalogue(t *testing.T) {
 	assert.Equal(t, "invalid catalogue", agent.Error)
 	assert.Nil(t, agent.Proposal)
 }
+
+func TestShoppingAgentPassesScenarioToPlanning(t *testing.T) {
+	env := newCatalogueEnv()
+	var a *activities.Activities
+	env.OnActivity(a.GetCatalogue, mock.Anything).Return(catalogue, nil)
+	expected := planningInput()
+	expected.Scenario = activities.ScenarioAIServiceUnavailable
+	// Planning only succeeds if it receives the selected scenario
+	env.OnActivity(a.PlanPurchase, mock.Anything, expected).Return(proposed, nil)
+	cancelOnceAwaitingApproval(t, env)
+
+	input := newAgentInput()
+	input.Demo = &workflows.ShoppingAgentDemoOptions{Scenario: activities.ScenarioAIServiceUnavailable, InventoryFailures: 2}
+	env.ExecuteWorkflow(workflows.ShoppingAgentWorkflow, input)
+
+	assertCancelled(t, env)
+}

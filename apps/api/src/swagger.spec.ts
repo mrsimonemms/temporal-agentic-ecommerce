@@ -343,8 +343,17 @@ describe('OpenAPI document', () => {
       properties: { request: { maxLength: 1000 } },
     });
     expect(schemas.ShoppingAgentDemoDto).toMatchObject({
-      properties: { inventoryFailures: { type: 'integer', minimum: 0, maximum: 2 } },
+      properties: {
+        scenario: { enum: ['none', 'ai_service_unavailable'], default: 'none' },
+        inventoryFailures: { type: 'integer', minimum: 0, maximum: 2 },
+      },
     });
+    // Both demo controls are optional and independent
+    expect((schemas.ShoppingAgentDemoDto as { required?: string[] }).required).toBeUndefined();
+    expect(examples.aiServiceUnavailable.value).toMatchObject({
+      demo: { scenario: 'ai_service_unavailable', inventoryFailures: 2 },
+    });
+    expect(start.description).toContain('ai_service_unavailable');
     expect(schemas.DecidePurchaseDto).toMatchObject({
       required: ['decision'],
       properties: { decision: { enum: ['approve', 'reject'] } },

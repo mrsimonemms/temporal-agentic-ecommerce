@@ -53,13 +53,17 @@ const (
 
 // planPurchaseActivityOptions bound the model interaction. Each attempt is
 // itself bounded by the Activity's model turn and request timeout limits.
+// Transient failures are retried one to two seconds apart, quickly enough to
+// watch during a live demonstration. Attempts are bounded: the
+// ai_service_unavailable scenario uses five, leaving room for real transient
+// OpenAI errors. Permanent OpenAI errors are non-retryable and fail at once.
 var planPurchaseActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 4 * time.Minute,
 	RetryPolicy: &temporal.RetryPolicy{
-		InitialInterval:    2 * time.Second,
-		BackoffCoefficient: 2,
-		MaximumInterval:    30 * time.Second,
-		MaximumAttempts:    3,
+		InitialInterval:    time.Second,
+		BackoffCoefficient: 2.0,
+		MaximumInterval:    2 * time.Second,
+		MaximumAttempts:    10,
 	},
 }
 
@@ -73,7 +77,7 @@ var commerceActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 30 * time.Second,
 	RetryPolicy: &temporal.RetryPolicy{
 		InitialInterval:    time.Second,
-		BackoffCoefficient: 2,
+		BackoffCoefficient: 2.0,
 		MaximumInterval:    10 * time.Second,
 	},
 }
@@ -81,6 +85,8 @@ var commerceActivityOptions = workflow.ActivityOptions{
 // ShoppingAgentDemoOptions are demo-only controls for the Order the purchase
 // places. They are not part of the purchase proposal or the checkout.
 type ShoppingAgentDemoOptions struct {
+	// Named failure behaviour for the Shopping Agent's AI planning
+	Scenario activities.DemoScenario `json:"scenario,omitempty"`
 	// Number of inventory reservation attempts that fail before succeeding
 	InventoryFailures int32 `json:"inventoryFailures,omitempty"`
 }
@@ -144,6 +150,9 @@ func (i *ShoppingAgentInput) validate() error {
 	if i.Demo != nil && (i.Demo.InventoryFailures < 0 || i.Demo.InventoryFailures > maxInventoryFailures) {
 		errs = append(errs, fmt.Errorf("demo inventoryFailures must be between 0 and %d", maxInventoryFailures))
 	}
+	if i.Demo != nil && !i.Demo.Scenario.Valid() {
+		errs = append(errs, fmt.Errorf("demo scenario %q is not supported", i.Demo.Scenario))
+	}
 	return errors.Join(errs...)
 }
 
@@ -190,13 +199,15 @@ func getCatalogue(ctx workflow.Context) (*activities.Catalogue, error) {
 	return &catalogue, err
 }
 
-func planPurchase(ctx workflow.Context, request string, catalogue *activities.Catalogue) (*activities.PurchasePlan, error) {
+func planPurchase(
+	ctx workflow.Context, request string, catalogue *activities.Catalogue, scenario activities.DemoScenario,
+) (*activities.PurchasePlan, error) {
 	var a *activities.Activities
 	var plan activities.PurchasePlan
 	err := workflow.ExecuteActivity(
 		workflow.WithActivityOptions(ctx, planPurchaseActivityOptions),
 		a.PlanPurchase,
-		&activities.PlanPurchaseInput{Request: request, Catalogue: *catalogue},
+		&activities.PlanPurchaseInput{Request: request, Catalogue: *catalogue, Scenario: scenario},
 	).Get(ctx, &plan)
 	return &plan, err
 }
@@ -325,7 +336,11 @@ func ShoppingAgentWorkflow(ctx workflow.Context, input *ShoppingAgentInput) (*Sh
 		return nil, agent.fail("unable to retrieve catalogue", errTypePlanningFailed, err)
 	}
 
-	plan, err := planPurchase(ctx, input.Request, catalogue)
+	var scenario activities.DemoScenario
+	if input.Demo != nil {
+		scenario = input.Demo.Scenario
+	}
+	plan, err := planPurchase(ctx, input.Request, catalogue, scenario)
 	if err != nil {
 		return nil, agent.fail("unable to plan purchase", errTypePlanningFailed, err)
 	}

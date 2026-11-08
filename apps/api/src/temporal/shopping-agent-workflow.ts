@@ -24,9 +24,17 @@ export type ShoppingAgentStatus =
 // Matches workflows.PurchaseDecision
 export type PurchaseDecision = 'approve' | 'reject';
 
+// Matches activities.DemoScenario: a named failure behaviour for the
+// Shopping Agent's AI planning
+export const DEMO_SCENARIOS = ['none', 'ai_service_unavailable'] as const;
+export type DemoScenario = (typeof DEMO_SCENARIOS)[number];
+
 // Matches workflows.ShoppingAgentDemoOptions. Demo-only: not part of the
 // purchase proposal or the checkout.
 export interface ShoppingAgentDemoOptions {
+  // Affects the Shopping Agent only. The Workflow treats an omitted scenario
+  // as none.
+  scenario?: DemoScenario;
   // Inventory reservation attempts that fail for the Order the purchase places.
   // The Go field is an int32 and the Workflow accepts 0 to 2.
   inventoryFailures?: number;
