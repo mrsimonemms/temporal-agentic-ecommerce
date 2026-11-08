@@ -23,11 +23,11 @@ describe('WorkflowPanel', () => {
     expect(content).toContain('No Workflow yet');
   });
 
-  it('distinguishes the operational view from the UCP Order', () => {
+  it('distinguishes the operational view from the customer-facing Order', () => {
     const { content } = renderPanel({ workflow: orderStateFixture() });
 
     expect(content).toContain('Internal · Temporal Order Workflow');
-    expect(content).toContain('Not part of the UCP Order');
+    expect(content).toContain('Not shown to the customer');
   });
 
   it('explains that Temporal retries the configured inventory failures', () => {

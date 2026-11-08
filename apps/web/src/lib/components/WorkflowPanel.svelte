@@ -92,7 +92,7 @@
     {/if}
   </div>
 
-  <p class="scope">Demo-only operational view of the Workflow. Not part of the UCP Order.</p>
+  <p class="scope">Demo-only operational view of the Workflow. Not shown to the customer.</p>
 
   {#if !orderId}
     <div class="empty">
@@ -364,10 +364,12 @@
     list-style: none;
   }
 
+  /* The source moves below the item when both do not fit on one line */
   .plan li {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
-    gap: 1rem;
+    gap: 0 1rem;
   }
 
   .history {

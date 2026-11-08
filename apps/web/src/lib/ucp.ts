@@ -8,6 +8,8 @@ import type {
   SelectedPaymentInstrument,
 } from '@ucp-js/sdk';
 
+import { CATALOGUE } from './catalogue';
+
 // Browser client for the UCP endpoints, called through the dashboard's own
 // server routes which proxy to the NestJS API
 
@@ -128,5 +130,37 @@ export function demoPaymentInstrument(
     selected: true,
     display: { brand: 'mastercard', last_digits: '5678' },
     credential: { type: 'PAYMENT_GATEWAY' },
+  };
+}
+
+type Buyer = NonNullable<CheckoutCreateRequest['buyer']>;
+
+// UCP describes the buyer with separate first and last names, but names do not
+// all divide that way: some have one part, some several, and the order differs
+// between cultures. The whole name is therefore sent as first_name, without a
+// last_name, so it is never split or reordered. The commerce API joins the two
+// fields with a space, so the name reaches the Order exactly as entered.
+export function checkoutBuyer(email: string, name: string): Buyer {
+  const trimmed = name.trim();
+  return { email: email.trim(), first_name: trimmed || undefined };
+}
+
+// The buyer's name as entered, from a checkout created by any client
+export function buyerName(buyer: Buyer | undefined): string {
+  return [buyer?.first_name, buyer?.last_name].filter(Boolean).join(' ');
+}
+
+// Builds the create request for the products and quantities selected in the
+// dashboard. Products with no quantity are left out.
+export function checkoutRequest(
+  quantities: Record<string, number>,
+  buyer: { email: string; name: string },
+): CheckoutCreateRequest {
+  return {
+    line_items: CATALOGUE.filter((item) => (quantities[item.id] ?? 0) > 0).map((item) => ({
+      item: { id: item.id },
+      quantity: quantities[item.id],
+    })),
+    buyer: checkoutBuyer(buyer.email, buyer.name),
   };
 }

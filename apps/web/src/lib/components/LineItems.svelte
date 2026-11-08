@@ -26,51 +26,59 @@
   }: { rows: LineRow[]; currency: string; total?: number; fulfilment?: boolean } = $props();
 </script>
 
-<table>
-  <thead>
-    <tr>
-      <th scope="col">Item</th>
-      <th scope="col" class="number">Price</th>
-      <th scope="col" class="number">Qty</th>
-      {#if fulfilment}
-        <th scope="col" class="number">Fulfilled</th>
-        <th scope="col">Status</th>
-      {/if}
-      <th scope="col" class="number">Total</th>
-    </tr>
-  </thead>
-  <tbody>
-    {#each rows as row (row.id)}
+<!-- Scrolls within its panel on narrow screens rather than widening the page -->
+<div class="table-scroll">
+  <table>
+    <thead>
       <tr>
-        <td>
-          <span class="title">{row.title}</span>
-          <span class="sku mono">{row.sku}</span>
-        </td>
-        <td class="number">{formatAmount(row.unitPrice, currency)}</td>
-        <td class="number">{row.quantity}</td>
+        <th scope="col">Item</th>
+        <th scope="col" class="number">Price</th>
+        <th scope="col" class="number">Qty</th>
         {#if fulfilment}
-          <td class="number">{row.fulfilled ?? 0} / {row.quantity}</td>
-          <td>
-            {#if row.status}
-              <StatusBadge status={row.status} />
-            {/if}
-          </td>
+          <th scope="col" class="number">Fulfilled</th>
+          <th scope="col">Status</th>
         {/if}
-        <td class="number">{formatAmount(row.total, currency)}</td>
+        <th scope="col" class="number">Total</th>
       </tr>
-    {/each}
-  </tbody>
-  {#if total !== undefined}
-    <tfoot>
-      <tr>
-        <th scope="row" colspan={fulfilment ? 5 : 3}>Total</th>
-        <td class="number grand-total">{formatAmount(total, currency)}</td>
-      </tr>
-    </tfoot>
-  {/if}
-</table>
+    </thead>
+    <tbody>
+      {#each rows as row (row.id)}
+        <tr>
+          <td>
+            <span class="title">{row.title}</span>
+            <span class="sku mono">{row.sku}</span>
+          </td>
+          <td class="number">{formatAmount(row.unitPrice, currency)}</td>
+          <td class="number">{row.quantity}</td>
+          {#if fulfilment}
+            <td class="number">{row.fulfilled ?? 0} / {row.quantity}</td>
+            <td>
+              {#if row.status}
+                <StatusBadge status={row.status} />
+              {/if}
+            </td>
+          {/if}
+          <td class="number">{formatAmount(row.total, currency)}</td>
+        </tr>
+      {/each}
+    </tbody>
+    {#if total !== undefined}
+      <tfoot>
+        <tr>
+          <th scope="row" colspan={fulfilment ? 5 : 3}>Total</th>
+          <td class="number grand-total">{formatAmount(total, currency)}</td>
+        </tr>
+      </tfoot>
+    {/if}
+  </table>
+</div>
 
 <style>
+  .table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
   table {
     width: 100%;
     border-collapse: collapse;

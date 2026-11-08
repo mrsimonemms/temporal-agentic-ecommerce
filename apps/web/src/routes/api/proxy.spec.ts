@@ -8,6 +8,9 @@ import { GET as getOrderState } from './demo/orders/[id]/+server';
 import { POST as fulfilOrder } from './demo/orders/[id]/fulfil/+server';
 import { POST as reportException } from './demo/orders/[id]/fulfilment-exception/+server';
 import { POST as resolveException } from './demo/orders/[id]/resolve-fulfilment-exception/+server';
+import { POST as startAgent } from './demo/shopping-agents/+server';
+import { GET as getAgent } from './demo/shopping-agents/[id]/+server';
+import { POST as decidePurchase } from './demo/shopping-agents/[id]/decision/+server';
 import { GET as getOrder } from './orders/[id]/+server';
 
 vi.mock('$env/dynamic/private', () => ({ env: { API_URL: 'http://api:9999' } }));
@@ -109,5 +112,34 @@ describe('Demo proxy routes', () => {
     expect(String(url)).toBe('http://api:9999/v1/demo/orders/ord_1%2F..%2Fx/fulfil');
     expect(init.method).toBe('POST');
     expect(init.body).toBeUndefined();
+  });
+});
+
+describe('Shopping Agent proxy routes', () => {
+  it('starts a Shopping Agent', async () => {
+    const body = { request: 'Buy me a kettle', buyer: { email: 'jane@example.com' } };
+    const fetchMock = await invoke(startAgent, {}, body);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('http://api:9999/v1/demo/shopping-agents');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual(body);
+  });
+
+  it('gets the Shopping Agent state, encoding the ID', async () => {
+    const fetchMock = await invoke(getAgent, { id: 'agent_1/../x' });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('http://api:9999/v1/demo/shopping-agents/agent_1%2F..%2Fx');
+    expect(init.method).toBe('GET');
+  });
+
+  it('sends a purchase decision', async () => {
+    const fetchMock = await invoke(decidePurchase, { id: 'agent_123' }, { decision: 'approve' });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('http://api:9999/v1/demo/shopping-agents/agent_123/decision');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ decision: 'approve' });
   });
 });

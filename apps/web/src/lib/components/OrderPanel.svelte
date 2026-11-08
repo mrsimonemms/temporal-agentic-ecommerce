@@ -50,7 +50,7 @@
 <section class="panel order" aria-labelledby="order-heading" aria-busy={!!orderId && !order}>
   <div class="panel-header">
     <div>
-      <p class="eyebrow">UCP order · durable, coordinated by Temporal</p>
+      <p class="eyebrow">Customer view</p>
       <h2 id="order-heading">Order</h2>
     </div>
     {#if status}

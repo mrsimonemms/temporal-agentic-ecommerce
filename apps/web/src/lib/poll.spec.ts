@@ -116,4 +116,43 @@ describe('startPolling', () => {
 
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it('stops once the value is final', async () => {
+    const task = vi.fn().mockResolvedValueOnce('running').mockResolvedValue('done');
+    const onSuccess = vi.fn();
+
+    const stop = startPolling(task, {
+      intervalMs: 1000,
+      onSuccess,
+      onError: vi.fn(),
+      isFinal: (value) => value === 'done',
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(onSuccess).toHaveBeenLastCalledWith('done');
+
+    stop();
+  });
+
+  it('stops after a permanent error but retries others', async () => {
+    const task = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockRejectedValue(new Error('not found'));
+    const onError = vi.fn();
+
+    const stop = startPolling(task, {
+      intervalMs: 1000,
+      onSuccess: vi.fn(),
+      onError,
+      isPermanent: (err) => (err as Error).message === 'not found',
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(task).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenLastCalledWith(new Error('not found'));
+
+    stop();
+  });
 });

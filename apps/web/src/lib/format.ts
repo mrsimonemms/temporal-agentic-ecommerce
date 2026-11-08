@@ -1,5 +1,6 @@
 import type { CheckoutResponse, Order } from '@ucp-js/sdk';
 
+import type { AgentStatus } from './agent';
 import type { OrderStatus } from './demo';
 
 export type Tone = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
@@ -69,6 +70,21 @@ export function workflowStatus(status: OrderStatus): StatusDisplay {
   return WORKFLOW_STATUSES[status];
 }
 
+const AGENT_STATUSES: Record<AgentStatus, StatusDisplay> = {
+  planning: { label: 'Planning', tone: 'info' },
+  awaiting_approval: { label: 'Awaiting approval', tone: 'warning' },
+  approved: { label: 'Approved', tone: 'info' },
+  purchasing: { label: 'Purchasing', tone: 'info' },
+  purchased: { label: 'Purchased', tone: 'success' },
+  rejected: { label: 'Rejected', tone: 'neutral' },
+  failed: { label: 'Failed', tone: 'danger' },
+};
+
+// Shopping Agent Workflow status
+export function agentStatus(status: AgentStatus): StatusDisplay {
+  return AGENT_STATUSES[status];
+}
+
 export function formatTime(value: string | Date): string {
   return new Date(value).toLocaleTimeString('en-GB');
 }
@@ -77,4 +93,9 @@ export function formatTime(value: string | Date): string {
 export interface Feedback {
   tone: 'success' | 'warning' | 'danger';
   message: string;
+}
+
+// Demo-only number of simulated inventory reservation failures
+export function failuresLabel(failures: number): string {
+  return failures === 0 ? 'None' : `${failures} ${failures === 1 ? 'failure' : 'failures'}`;
 }

@@ -5,14 +5,13 @@
 <script lang="ts">
   import type { CheckoutResponse } from '@ucp-js/sdk';
 
-  import { type Feedback, checkoutStatus, totalOf } from '$lib/format';
-  import { demoPaymentInstrument } from '$lib/ucp';
+  import { type Feedback, checkoutStatus, failuresLabel, totalOf } from '$lib/format';
+  import { demoPaymentInstrument, buyerName as nameOf } from '$lib/ucp';
 
   import CopyValue from './CopyValue.svelte';
+  import FailureChoices from './FailureChoices.svelte';
   import LineItems from './LineItems.svelte';
   import StatusBadge from './StatusBadge.svelte';
-
-  const INVENTORY_FAILURE_CHOICES = [0, 1, 2];
 
   let {
     checkout,
@@ -35,10 +34,6 @@
     onconfigureinventory: (failures: number) => void;
   } = $props();
 
-  function failuresLabel(failures: number): string {
-    return failures === 0 ? 'None' : `${failures} ${failures === 1 ? 'failure' : 'failures'}`;
-  }
-
   let rows = $derived(
     checkout.line_items.map((lineItem) => ({
       id: lineItem.id,
@@ -50,9 +45,7 @@
     })),
   );
 
-  let buyerName = $derived(
-    [checkout.buyer?.first_name, checkout.buyer?.last_name].filter(Boolean).join(' '),
-  );
+  let buyerName = $derived(nameOf(checkout.buyer));
 
   let instrument = $derived(demoPaymentInstrument(checkout));
   let canComplete = $derived(
@@ -69,7 +62,7 @@
 <section class="panel" aria-labelledby="checkout-heading">
   <div class="panel-header">
     <div>
-      <p class="eyebrow">UCP checkout</p>
+      <p class="eyebrow">Manual purchase</p>
       <h2 id="checkout-heading">Checkout</h2>
     </div>
     <StatusBadge status={checkoutStatus(checkout.status)} large />
@@ -105,21 +98,13 @@
       </span>
     </div>
     {#if inventoryConfigurable}
-      <div class="choices" role="group" aria-label="Simulated inventory failures">
-        {#each INVENTORY_FAILURE_CHOICES as failures (failures)}
-          <button
-            type="button"
-            class={['choice', { selected: inventoryFailures === failures }]}
-            aria-pressed={inventoryFailures === failures}
-            disabled={busy}
-            onclick={() => failures !== inventoryFailures && onconfigureinventory(failures)}
-          >
-            {failuresLabel(failures)}
-          </button>
-        {/each}
-      </div>
+      <FailureChoices
+        selected={inventoryFailures}
+        disabled={busy}
+        onselect={onconfigureinventory}
+      />
       <p class={['hint', inventoryFeedback?.tone]} role="status">
-        {inventoryFeedback?.message ?? 'Applies to this checkout only. Not sent through UCP.'}
+        {inventoryFeedback?.message ?? 'Applies to this checkout only. Not part of the purchase.'}
       </p>
     {:else}
       <p class="hint">Locked once completion has started.</p>
@@ -130,8 +115,8 @@
     <div class="notice success">
       <strong>Order placed</strong>
       <p>
-        Checkout is finished. The Order reference returned by UCP is shown alongside, where its
-        progress continues.
+        Checkout is finished. The Order continues in its own Workflow, independently of the
+        checkout.
       </p>
     </div>
   {:else if checkout.status === 'complete_in_progress'}
@@ -207,75 +192,6 @@
     align-items: flex-end;
     gap: 0.4rem;
     margin-left: auto;
-  }
-
-  .demo-control {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border: 2px dashed var(--border);
-    border-radius: var(--radius);
-    background: var(--surface-muted);
-  }
-
-  .demo-heading {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 1rem;
-  }
-
-  .configured {
-    font-weight: 650;
-  }
-
-  .choices {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0.5rem;
-  }
-
-  .choice {
-    font: inherit;
-    font-weight: 600;
-    padding: 0.6rem 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    background: var(--surface);
-    color: var(--text);
-    cursor: pointer;
-  }
-
-  .choice.selected {
-    border-color: var(--accent);
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
-
-  .choice:disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-  }
-
-  .hint {
-    font-size: 0.85rem;
-    color: var(--muted);
-  }
-
-  .hint.success {
-    color: var(--success);
-    font-weight: 600;
-  }
-
-  .hint.warning {
-    color: var(--warning);
-    font-weight: 600;
-  }
-
-  .hint.danger {
-    color: var(--danger);
-    font-weight: 600;
   }
 
   .payment {

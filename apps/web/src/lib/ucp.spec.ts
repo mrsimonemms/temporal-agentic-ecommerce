@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkoutFixture, orderFixture } from './testing/fixtures';
 import {
   ApiError,
+  buyerName,
+  checkoutBuyer,
+  checkoutRequest,
   completeCheckout,
   createCheckout,
   demoPaymentInstrument,
@@ -171,5 +174,77 @@ describe('getOrder', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')));
 
     await expect(getOrder('ord_123')).rejects.toThrow('Unable to reach the dashboard server');
+  });
+});
+
+describe('checkoutBuyer', () => {
+  it.each([
+    ['a single-word name', 'Sukarno'],
+    ['a name with two parts', 'Jane Doe'],
+    ['a name with several parts', 'María José García López'],
+    ['a family name written first', 'Nguyễn Văn An'],
+    ['a name with a particle', 'Ludwig van Beethoven'],
+  ])('keeps %s whole, without splitting it', (_, name) => {
+    expect(checkoutBuyer('buyer@example.com', name)).toEqual({
+      email: 'buyer@example.com',
+      first_name: name,
+    });
+  });
+
+  it('trims surrounding whitespace only', () => {
+    expect(checkoutBuyer(' jane@example.com ', '  Jean-Luc  Picard ')).toEqual({
+      email: 'jane@example.com',
+      first_name: 'Jean-Luc  Picard',
+    });
+  });
+
+  it('omits the name when none is given', () => {
+    expect(checkoutBuyer('jane@example.com', '   ')).toEqual({ email: 'jane@example.com' });
+  });
+});
+
+describe('buyerName', () => {
+  it('shows a name entered in the single Name field exactly', () => {
+    for (const name of ['Sukarno', 'María José García López']) {
+      expect(buyerName(checkoutBuyer('buyer@example.com', name))).toBe(name);
+    }
+  });
+
+  it('joins first and last names sent by other clients', () => {
+    expect(buyerName({ email: 'jane@example.com', first_name: 'Jane', last_name: 'Doe' })).toBe(
+      'Jane Doe',
+    );
+  });
+
+  it('is empty when there is no name', () => {
+    expect(buyerName({ email: 'jane@example.com' })).toBe('');
+    expect(buyerName(undefined)).toBe('');
+  });
+});
+
+describe('checkoutRequest', () => {
+  it('maps the selected products and buyer into the UCP create request', () => {
+    expect(
+      checkoutRequest(
+        { sku_kettle: 1, sku_toaster: 0, sku_mug_set: 2 },
+        { email: 'jane@example.com', name: 'Jane Doe' },
+      ),
+    ).toEqual({
+      line_items: [
+        { item: { id: 'sku_kettle' }, quantity: 1 },
+        { item: { id: 'sku_mug_set' }, quantity: 2 },
+      ],
+      buyer: { email: 'jane@example.com', first_name: 'Jane Doe' },
+    });
+  });
+
+  it('keeps catalogue order and product IDs regardless of selection order', () => {
+    const request = checkoutRequest(
+      { sku_mug_set: 3, sku_kettle: 1 },
+      { email: 'a@example.com', name: 'Aaliyah' },
+    );
+
+    expect(request.line_items.map((line) => line.item.id)).toEqual(['sku_kettle', 'sku_mug_set']);
+    expect(request.buyer).toEqual({ email: 'a@example.com', first_name: 'Aaliyah' });
   });
 });

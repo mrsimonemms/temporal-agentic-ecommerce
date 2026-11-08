@@ -16,9 +16,11 @@
   let steps = $derived.by(() => {
     const exception = workflow?.fulfilment.exception;
     const resolved = (workflow?.fulfilment.resolutions?.length ?? 0) > 0 && !exception;
+    // An Order Workflow only exists once its checkout has completed, so the
+    // checkout steps are reached even when the checkout itself is not loaded
     const reached = [
-      !!checkout,
-      checkout?.status === 'completed',
+      !!checkout || !!workflow,
+      checkout?.status === 'completed' || !!workflow,
       !!workflow,
       !!workflow?.inventoryReservationId,
       !!exception || resolved,
@@ -29,7 +31,7 @@
     ];
 
     return [
-      { label: 'Checkout created', detail: 'UCP checkout' },
+      { label: 'Checkout created', detail: 'Buyer and items' },
       { label: 'Checkout completed', detail: 'Stubbed payment' },
       { label: 'Reserving inventory', detail: 'Retried by Temporal' },
       { label: 'Confirmed', detail: 'Inventory reserved' },
@@ -65,7 +67,7 @@
 <nav class="lifecycle" aria-label="Commerce lifecycle">
   <div class="stages">
     <div class="group checkout">
-      <div class="heading"><span class="eyebrow">Checkout · UCP</span></div>
+      <div class="heading"><span class="eyebrow">Checkout</span></div>
       <ol>
         {#each steps.slice(0, CHECKOUT_STEPS) as step, index (index)}
           {@render stage(step, index + 1)}

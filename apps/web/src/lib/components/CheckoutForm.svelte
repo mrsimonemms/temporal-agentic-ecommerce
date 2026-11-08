@@ -2,6 +2,7 @@
   import type { CheckoutCreateRequest } from '@ucp-js/sdk';
 
   import { CATALOGUE } from '$lib/catalogue';
+  import { checkoutRequest } from '$lib/ucp';
 
   const MAX_QUANTITY = 9;
 
@@ -12,9 +13,8 @@
 
   // Prefilled so a checkout can be created in one click during a demo
   let quantities = $state<Record<string, number>>({ sku_kettle: 1, sku_mug_set: 2 });
+  let name = $state('Jane Doe');
   let email = $state('jane@example.com');
-  let firstName = $state('Jane');
-  let lastName = $state('Doe');
 
   let itemCount = $derived(Object.values(quantities).reduce((sum, quantity) => sum + quantity, 0));
 
@@ -25,27 +25,22 @@
   function submit(event: SubmitEvent) {
     event.preventDefault();
 
-    oncreate({
-      line_items: CATALOGUE.filter((item) => (quantities[item.id] ?? 0) > 0).map((item) => ({
-        item: { id: item.id },
-        quantity: quantities[item.id],
-      })),
-      buyer: {
-        email: email.trim(),
-        first_name: firstName.trim() || undefined,
-        last_name: lastName.trim() || undefined,
-      },
-    });
+    oncreate(checkoutRequest(quantities, { email, name }));
   }
 </script>
 
-<form class="panel" onsubmit={submit}>
+<form class="panel" onsubmit={submit} aria-labelledby="manual-checkout-heading">
   <div class="panel-header">
     <div>
-      <p class="eyebrow">UCP checkout</p>
-      <h2>New checkout</h2>
+      <p class="eyebrow">Manual purchase</p>
+      <h2 id="manual-checkout-heading">Or buy manually</h2>
     </div>
   </div>
+
+  <p class="explainer">
+    Buy directly without using AI. The purchase creates the same durable Order, with the same
+    fulfilment and recovery capabilities.
+  </p>
 
   <fieldset>
     <legend class="eyebrow">Products</legend>
@@ -53,10 +48,7 @@
       {#each CATALOGUE as item (item.id)}
         {@const quantity = quantities[item.id] ?? 0}
         <li class={{ selected: quantity > 0 }}>
-          <div>
-            <span class="title">{item.title}</span>
-            <span class="sku mono">{item.id}</span>
-          </div>
+          <span class="title">{item.title}</span>
           <div class="stepper">
             <button
               type="button"
@@ -79,17 +71,14 @@
 
   <fieldset class="buyer">
     <legend class="eyebrow">Buyer</legend>
-    <label class="email">
+    <!-- One field, so names are entered as written rather than split into parts -->
+    <label>
+      Name
+      <input type="text" bind:value={name} autocomplete="off" disabled={busy} />
+    </label>
+    <label>
       Email
       <input type="email" bind:value={email} required autocomplete="off" disabled={busy} />
-    </label>
-    <label>
-      First name
-      <input type="text" bind:value={firstName} autocomplete="off" disabled={busy} />
-    </label>
-    <label>
-      Last name
-      <input type="text" bind:value={lastName} autocomplete="off" disabled={busy} />
     </label>
   </fieldset>
 
@@ -143,13 +132,7 @@
   }
 
   .title {
-    display: block;
     font-weight: 600;
-  }
-
-  .sku {
-    color: var(--muted);
-    font-size: 0.8rem;
   }
 
   .stepper {
@@ -183,18 +166,18 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /*
+   * Name and email sit side by side when there is room and stack otherwise,
+   * matching the agent form. min() lets a track shrink below the inputs'
+   * intrinsic width on the narrowest screens.
+   */
   .buyer {
     display: grid;
-    /* A bare 1fr track cannot shrink below the inputs' intrinsic width */
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
     gap: 0.75rem;
   }
 
   .buyer legend {
-    grid-column: 1 / -1;
-  }
-
-  .email {
     grid-column: 1 / -1;
   }
 
@@ -229,8 +212,12 @@
     flex-wrap: wrap;
   }
 
+  .explainer,
   .hint {
     color: var(--muted);
+  }
+
+  .hint {
     font-size: 0.9rem;
   }
 </style>

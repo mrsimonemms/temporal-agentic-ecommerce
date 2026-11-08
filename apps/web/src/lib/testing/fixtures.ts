@@ -1,5 +1,6 @@
 import type { CheckoutResponse, Order } from '@ucp-js/sdk';
 
+import type { AgentState } from '../agent';
 import type { OrderState } from '../demo';
 
 // Responses shaped like those returned by apps/api for the demo catalogue
@@ -138,3 +139,55 @@ export const resolutionFixture = {
   raisedAt: exceptionFixture.raisedAt,
   resolvedAt: '2026-10-28T15:02:00Z',
 };
+
+// Shopping Agent state as returned by GET /v1/demo/shopping-agents/{id} for
+// the kettle and mugs request, at the given status
+export function agentFixture(
+  status: AgentState['status'] = 'awaiting_approval',
+  overrides: Partial<AgentState> = {},
+): AgentState {
+  const proposed = status !== 'planning';
+  const approved = ['approved', 'purchasing', 'purchased'].includes(status);
+  return {
+    id: 'agent_123',
+    status,
+    request: 'Buy me a kettle and two sets of mugs. Keep it under £100.',
+    buyer: { email: 'jane@example.com', name: 'Jane Doe' },
+    proposal: proposed
+      ? {
+          lines: [
+            {
+              productId: 'sku_kettle',
+              title: 'Stainless Steel Kettle',
+              quantity: 1,
+              unitPrice: 3499,
+              total: 3499,
+            },
+            {
+              productId: 'sku_mug_set',
+              title: 'Stoneware Mug Set (4 pack)',
+              quantity: 2,
+              unitPrice: 2400,
+              total: 4800,
+            },
+          ],
+          currency: 'GBP',
+          total: 8299,
+          budget: 10000,
+        }
+      : undefined,
+    decision:
+      approved || status === 'rejected'
+        ? {
+            decision: status === 'rejected' ? 'reject' : 'approve',
+            decidedBy: 'jane@example.com',
+            decidedAt: '2026-11-08T12:01:00Z',
+          }
+        : undefined,
+    checkoutId: status === 'purchased' ? 'chk_123' : undefined,
+    orderId: status === 'purchased' ? 'ord_123' : undefined,
+    orderPermalinkUrl: status === 'purchased' ? 'http://localhost:9999/orders/ord_123' : undefined,
+    createdAt: '2026-11-08T12:00:00Z',
+    ...overrides,
+  };
+}

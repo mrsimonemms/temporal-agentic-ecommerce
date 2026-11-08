@@ -98,4 +98,18 @@ describe('Lifecycle', () => {
     expect(result[5]).toBe('Awaiting intervention: active');
     expect(result[6]).toBe('Alternative approved: pending');
   });
+
+  it('treats the checkout as completed when only the Order is known', () => {
+    // The Order route loads the Order Workflow, not the checkout that placed it
+    const result = steps(
+      undefined,
+      orderStateFixture({ status: 'reserving_inventory', inventoryReservationId: undefined }),
+    );
+
+    expect(result.slice(0, 3)).toEqual([
+      'Checkout created: done',
+      'Checkout completed: done',
+      'Reserving inventory: active',
+    ]);
+  });
 });

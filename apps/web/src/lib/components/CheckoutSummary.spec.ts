@@ -88,7 +88,7 @@ describe('CheckoutSummary', () => {
       expect(content).toContain('Demo only · inventory failures');
       expect(content).toContain('None 1 failure 2 failures');
       expect(body).toMatch(/aria-pressed="true"[^>]*>\s*2 failures/);
-      expect(content).toContain('Not sent through UCP');
+      expect(content).toContain('Not part of the purchase');
     });
 
     it('locks the configuration once completion has started', () => {
@@ -134,4 +134,18 @@ describe('CheckoutSummary', () => {
       expect(text(body)).not.toContain('Completing');
     });
   });
+
+  it.each(['Sukarno', 'María José García López'])(
+    'shows the name %s exactly as entered in the single Name field',
+    (name) => {
+      const { body } = render(CheckoutSummary, {
+        props: {
+          checkout: checkoutFixture({ buyer: { email: 'buyer@example.com', first_name: name } }),
+          ...handlers,
+        },
+      });
+
+      expect(text(body)).toContain(`${name} · buyer@example.com`);
+    },
+  );
 });

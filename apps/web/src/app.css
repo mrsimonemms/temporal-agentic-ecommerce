@@ -171,3 +171,45 @@ code,
 .notice strong {
   color: inherit;
 }
+
+/* Demo-only controls, set apart from the commerce data by a dashed border */
+.demo-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.demo-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.demo-heading .configured {
+  font-weight: 650;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.hint.success {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.hint.warning {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.hint.danger {
+  color: var(--danger);
+  font-weight: 600;
+}
