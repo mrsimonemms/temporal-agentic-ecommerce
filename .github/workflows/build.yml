@@ -44,6 +44,7 @@ jobs:
       - uses: moonrepo/setup-toolchain@v0
         with:
           auto-install: true
+          cache: false
 
       - uses: pre-commit/action@v3.0.1
 
@@ -57,6 +58,7 @@ jobs:
       - uses: moonrepo/setup-toolchain@v0
         with:
           auto-install: true
+          cache: false
 
       - name: Set up Go
         uses: actions/setup-go@v6
