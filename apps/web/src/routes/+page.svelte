@@ -2,6 +2,8 @@
   import type { CheckoutCreateRequest, CheckoutResponse, Order } from '@ucp-js/sdk';
   import { onMount } from 'svelte';
 
+  import { resolve as resolvePath } from '$app/paths';
+
   import CheckoutForm from '$lib/components/CheckoutForm.svelte';
   import type { CheckoutAction } from '$lib/components/CheckoutSummary.svelte';
   import CheckoutSummary from '$lib/components/CheckoutSummary.svelte';
@@ -275,7 +277,11 @@
 <div class="dashboard">
   <header>
     <div class="brand">
-      <span class="logo" aria-hidden="true">T×U</span>
+      <a href={resolvePath('/')}>
+        <span class="logo" aria-hidden="true">
+          <img src="/img/logo.png" alt="Temporal × UCP" width="24" height="24" />
+        </span>
+      </a>
       <div>
         <h1>Order lifecycle</h1>
         <p>Universal Commerce Protocol checkout, durable Order execution with Temporal</p>
