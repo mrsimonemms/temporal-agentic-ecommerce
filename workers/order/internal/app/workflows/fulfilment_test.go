@@ -24,27 +24,32 @@ var alternativeSource = workflows.ResolveFulfilmentExceptionRequest{
 	Note:              "Same item, ships a day later",
 }
 
-// updateResult records the outcome of an Update sent to the test environment
-type updateResult struct {
+// updateResult records the outcome of an Update sent to the test environment.
+// Callbacks run asynchronously, so check it from a later delayed callback.
+type updateResult[T any] struct {
 	accepted bool
 	rejected error
-	order    *workflows.Order
+	value    *T
 	err      error
 }
 
-func resolve(env *testsuite.TestWorkflowEnvironment, req workflows.ResolveFulfilmentExceptionRequest) *updateResult {
-	result := &updateResult{}
-	env.UpdateWorkflow(workflows.UpdateResolveFulfilmentException, "", &testsuite.TestUpdateCallback{
+func sendUpdate[T any](env *testsuite.TestWorkflowEnvironment, name string, req any) *updateResult[T] {
+	result := &updateResult[T]{}
+	env.UpdateWorkflow(name, "", &testsuite.TestUpdateCallback{
 		OnAccept: func() { result.accepted = true },
 		OnReject: func(err error) { result.rejected = err },
 		OnComplete: func(v any, err error) {
 			result.err = err
-			if order, ok := v.(*workflows.Order); ok {
-				result.order = order
+			if value, ok := v.(*T); ok {
+				result.value = value
 			}
 		},
 	}, req)
 	return result
+}
+
+func resolve(env *testsuite.TestWorkflowEnvironment, req workflows.ResolveFulfilmentExceptionRequest) *updateResult[workflows.Order] {
+	return sendUpdate[workflows.Order](env, workflows.UpdateResolveFulfilmentException, req)
 }
 
 func raiseException(env *testsuite.TestWorkflowEnvironment, signal workflows.ReportFulfilmentExceptionSignal) {
@@ -89,7 +94,7 @@ func TestFulfilmentExceptionAwaitsIntervention(t *testing.T) {
 func TestResolveFulfilmentExceptionWithAlternativeSource(t *testing.T) {
 	env := newEnv()
 	input := newInput()
-	var result *updateResult
+	var result *updateResult[workflows.Order]
 
 	env.RegisterDelayedCallback(func() { raiseException(env, supplierException) }, time.Minute)
 	env.RegisterDelayedCallback(func() { result = resolve(env, alternativeSource) }, 2*time.Minute)
@@ -97,8 +102,8 @@ func TestResolveFulfilmentExceptionWithAlternativeSource(t *testing.T) {
 	env.RegisterDelayedCallback(func() {
 		require.True(t, result.accepted)
 		require.NoError(t, result.err)
-		require.NotNil(t, result.order)
-		assert.Equal(t, workflows.OrderStatusConfirmed, result.order.Status)
+		require.NotNil(t, result.value)
+		assert.Equal(t, workflows.OrderStatusConfirmed, result.value.Status)
 
 		order := queryOrder(t, env)
 		assert.Equal(t, workflows.OrderStatusConfirmed, order.Status)
@@ -178,7 +183,7 @@ func TestResolveFulfilmentExceptionRejectsInvalidResolutions(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(&req)
 			}
-			var result *updateResult
+			var result *updateResult[workflows.Order]
 			var before *workflows.Order
 
 			if test.raise {
