@@ -115,20 +115,40 @@ services:
     image: mongo:7
     ports:
       - 27017:27017
+    volumes:
+      - mongodb_data:/data/db
 
   temporal:
     image: temporalio/temporal
     ports:
       - 7233:7233
       - 8233:8233
-    command: server start-dev --ip 0.0.0.0
+    command:
+      - server
+      - start-dev
+      - --ip
+      - 0.0.0.0
+      - --db-filename
+      - /data/temporal.db
+    volumes:
+      - temporal_data:/data
     healthcheck:
       test: ["CMD-SHELL", "temporal operator cluster health"]
       interval: 10s
       timeout: 10s
       retries: 3
+    pre_start:
+      - image: alpine
+        user: "0:0"
+        command:
+          - chown
+          - -R
+          - 1000:1000
+          - /data
 
 volumes:
   apiapp_node_modules:
   webapp_node_modules:
   signing_key:
+  mongodb_data:
+  temporal_data:
