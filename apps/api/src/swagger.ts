@@ -79,14 +79,11 @@ function toOpenApiSchema(schema: Parameters<typeof zodToJsonSchema>[0]): SchemaO
 
 export function createOpenApiDocument(app: INestApplication): OpenAPIObject {
   const config = new DocumentBuilder()
-    .setTitle('Temporal UCP Reference Architecture')
+    .setTitle('Temporal Agentic Ecommerce')
     .setDescription(
-      'A reference architecture for using Temporal and Universal Commerce Protocol in harmony',
+      'A reference architecture for using Temporal to build agentic ecommerce applications',
     )
-    .setExternalDoc(
-      'Source code',
-      'https://github.com/mrsimonemms/temporal-ucp-reference-architecture',
-    )
+    .setExternalDoc('Source code', 'https://github.com/mrsimonemms/temporal-agentic-ecommerce')
     .addTag('UCP discovery', 'UCP merchant profile discovery')
     .addTag(
       'UCP checkout',

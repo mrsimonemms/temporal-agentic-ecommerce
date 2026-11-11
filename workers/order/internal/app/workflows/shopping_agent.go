@@ -7,7 +7,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order/internal/app/activities"
+	"github.com/mrsimonemms/temporal-agentic-ecommerce/workers/order/internal/app/activities"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )

@@ -4,9 +4,9 @@ import (
 	"strings"
 
 	gh "github.com/mrsimonemms/golang-helpers"
-	"github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order/internal/app"
-	"github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order/internal/app/activities"
-	"github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order/internal/app/workflows"
+	"github.com/mrsimonemms/temporal-agentic-ecommerce/workers/order/internal/app"
+	"github.com/mrsimonemms/temporal-agentic-ecommerce/workers/order/internal/app/activities"
+	"github.com/mrsimonemms/temporal-agentic-ecommerce/workers/order/internal/app/workflows"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"

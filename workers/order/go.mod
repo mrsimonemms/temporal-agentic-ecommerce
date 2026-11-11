@@ -1,4 +1,4 @@
-module github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order
+module github.com/mrsimonemms/temporal-agentic-ecommerce/workers/order
 
 go 1.27.1
 

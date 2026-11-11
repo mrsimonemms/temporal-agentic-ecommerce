@@ -4,8 +4,8 @@
   "checkout": "main",
   "context": {
     "cookiecutter": {
-      "project_name": "temporal-ucp-reference-architecture",
-      "description": "A reference architecture for using Temporal and Universal Commerce Protocol in harmony",
+      "project_name": "temporal-agentic-ecommerce",
+      "description": "A reference architecture for using Temporal to build agentic ecommerce applications",
       "author": "Simon Emms <simon@simonemms.com>",
       "_template": "https://github.com/mrsimonemms/new",
       "_commit": "6f9d354501373017c05fcf905450cfb9647ff8bf"

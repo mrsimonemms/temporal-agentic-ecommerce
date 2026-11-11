@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	gh "github.com/mrsimonemms/golang-helpers"
-	"github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order/internal/app/activities"
+	"github.com/mrsimonemms/temporal-agentic-ecommerce/workers/order/internal/app/activities"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

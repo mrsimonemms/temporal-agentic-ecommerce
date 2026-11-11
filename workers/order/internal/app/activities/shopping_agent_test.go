@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/mrsimonemms/temporal-ucp-reference-architecture/workers/order/internal/app/activities"
+	"github.com/mrsimonemms/temporal-agentic-ecommerce/workers/order/internal/app/activities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/temporal"

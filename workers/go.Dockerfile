@@ -1,6 +1,6 @@
 FROM golang AS builder
 ARG GIT_COMMIT
-ARG GIT_REPO="github.com/mrsimonemms/temporal-ucp-reference-architecture"
+ARG GIT_REPO="github.com/mrsimonemms/temporal-agentic-ecommerce"
 ARG PROJECT_NAME
 ARG VERSION
 ENV CGO_ENABLED=0
